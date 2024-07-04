@@ -9,10 +9,9 @@ function Export-HTMLtoCSV {
     param {
         [parameter(mandatory=$true)]
         [validatescript({(Get-Item $_).Extension -eq '.txt'})]
-$HTMLFile
         [string]$HTMLFile = "$PSScriptroot\*.html"
 
-        [Parameter()]
+        [Parameter(mandatory=$true)]
         [string]$Outfile = "$PDScriptroot\Converted.csv"
     }
 
