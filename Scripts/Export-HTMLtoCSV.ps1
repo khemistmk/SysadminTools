@@ -8,7 +8,7 @@ function Export-HTMLtoCSV {
     [CmdletBinding()]
     param {
         [parameter(mandatory=$true)]
-        [validatescript({(Get-Item $_).Extension -eq '.txt'})]
+        [validatescript({(Get-Item $_).Extension -eq '.html'})]
         [string]$HTMLFile = "$PSScriptroot\*.html"
 
         [Parameter(mandatory=$true)]
