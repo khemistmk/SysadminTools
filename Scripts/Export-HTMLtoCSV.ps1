@@ -7,17 +7,27 @@ function Export-HTMLtoCSV {
 #>
     [CmdletBinding()]
     param {
+        [Parameter()]
+        [string]$HTMLFile = "$PSScriptroot\*.html"
 
+        [Parameter()]
+        [string]$Outfile = "$PDScriptroot\Converted.csv"
     }
 
     begin {
-
+        if (Get-Module -ListAvailable -Name Read-HTMLTable) {
+    process
+} 
+else {
+    Install-Module -Name Read-HTMLTable
+    Import-Module-Name Read-HTMLTable
+}
     }
 
     process {
-        Import-Module -Name Read-HTMLTable
+        $table = Read-HTMLTable -InputObject $HTMLfile
         
-        $table | Where-Object -Filterscript {$_.Status -like "*User*" -or $_.Company -like "*User*" } |Select-Object -Property Status | Export-Csv c:\temp\users.csv
+        $table | Where-Object -Filterscript {$_.Status -like "*User*" -or $_.Company -like "*User*" } |Select-Object -Property Status | Export-Csv $outfile
     }
 
     end {
