@@ -19,16 +19,21 @@ function Start-UserSetup {
         }
     
         process {
-            if (Get-Module -ListAvailable -Name Read-HTMLTable) {
-            } 
-            else {
-                Install-Module -Name Read-HTMLTable
-                Import-Module-Name Read-HTMLTable
+            function Alignleft {
+                $RegKey = "HKLM:\SOFTWARE\Policies\Lenovo\System Update\UserSettings\General"
+                $RegName = "AdminCommandLine"
+                $RegValue = "/CM -search A -action INSTALL -includerebootpackages 3 -noicon -noreboot -exporttowmi"    
+                # Create Subkeys if they don't exist
+                if (!(Test-Path $RegKey)) {
+                    New-Item -Path $RegKey -Force | Out-Null
+                    New-ItemProperty -Path $RegKey -Name $RegName -Value $RegValue | Out-Null
+                }
+                else {
+                    New-ItemProperty -Path $RegKey -Name $RegName -Value $RegValue -Force | Out-Null
+                } 
             }
-            $table = Read-HTMLTable -InputObject $HTMLfile
-            
-            $table | Where-Object -Filterscript {$_.Status -like "*User*" -or $_.Company -like "*User*" } |Select-Object -Property Status | Export-Csv $outfile
         }
+      
     
         end {
     
