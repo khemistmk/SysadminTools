@@ -6,26 +6,26 @@ function Export-HTMLtoCSV {
         This script utilizes Import-HTML from the power
 #>
     [CmdletBinding()]
-    param {
+    param (
         [parameter(mandatory=$true)]
         [validatescript({(Get-Item $_).Extension -eq '.html'})]
-        [string]$HTMLFile = "$PSScriptroot\*.html"
+        [string]$HTMLFile,
 
         [Parameter(mandatory=$true)]
-        [string]$Outfile = "$PDScriptroot\Converted.csv"
-    }
+        [string]$Outfile
+    )
 
     begin {
-        if (Get-Module -ListAvailable -Name Read-HTMLTable) {
-    process
-} 
-else {
-    Install-Module -Name Read-HTMLTable
-    Import-Module-Name Read-HTMLTable
-}
+        
     }
 
     process {
+        if (Get-Module -ListAvailable -Name Read-HTMLTable) {
+        } 
+        else {
+            Install-Module -Name Read-HTMLTable
+            Import-Module-Name Read-HTMLTable
+        }
         $table = Read-HTMLTable -InputObject $HTMLfile
         
         $table | Where-Object -Filterscript {$_.Status -like "*User*" -or $_.Company -like "*User*" } |Select-Object -Property Status | Export-Csv $outfile
@@ -36,6 +36,3 @@ else {
     }
 
 }
-
-Import-Module -Name Read-HTMLTable
-$table | Where-Object -Filterscript {$_.Status -like "*User*" -or $_.Company -like "*User*" } |Select-Object -Property Status | Export-Csv c:\temp\users.csv
