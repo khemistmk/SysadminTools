@@ -21,10 +21,10 @@ function Export-HTMLtoCSV {
 
     process {
         if (Get-Module -ListAvailable -Name Read-HTMLTable) {
+    
         } 
         else {
-            Install-Module -Name Read-HTMLTable
-            Import-Module-Name Read-HTMLTable
+            Install-Script -Name Read-HTMLTable
         }
         $table = Read-HTMLTable -InputObject $HTMLfile
         
