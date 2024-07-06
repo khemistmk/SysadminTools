@@ -7,9 +7,9 @@ function Start-UserSetup {
     #>
         [CmdletBinding()]
         param (
-            [parameter(mandatory=$true)]
+            [parameter()]
             [Validateset("All","Alignleft","Aligncenter","Unpinall","")]
-            [string]$Startacions
+            [string]$Startacions = "All"
         )
     
         begin {
@@ -120,7 +120,7 @@ function Start-UserSetup {
             }
 
 
-            if ($Startaction -eq "All")
+            if ($Startactions -eq "All")
                 Set-TaskbarAlignleft
                 Disable-CopilotButton
                 Disable-LockscreenTips
