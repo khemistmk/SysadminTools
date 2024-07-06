@@ -28,6 +28,20 @@ function Start-UserSetup {
                 } 
             }
 
+            function Disable-TaskView {
+                $RegKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+                $RegName = "ShowTaskViewButton"
+                $RegValue = "00000000"    
+                # Create Subkeys if they don't exist
+                if (!(Test-Path $RegKey)) {
+                    New-Item -Path $RegKey -Force | Out-Null
+                    New-ItemProperty -Path $RegKey -Name $RegName -Value $RegValue -PropertyType DWORD -Force | Out-Null
+                }
+                else {
+                    New-ItemProperty -Path $RegKey -Name $RegName -Value $RegValue -PropertyType DWORD -Force | Out-Null
+                } 
+            }
+
             function Disable-CopilotButton {
                 $RegKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
                 $RegName = "ShowCopilotButton"
@@ -116,13 +130,14 @@ function Start-UserSetup {
                 }
             }
 
-                Set-TaskbarAlignleft
-                Disable-CopilotButton
-                Disable-LockscreenTips
-                Disable-WidgetsButton
-                Disable-SearchBox
-                Set-StartFolders
-                UnPin-Apps
+        Set-TaskbarAlignleft
+        Disable-TaskView
+        Disable-CopilotButton
+        Disable-LockscreenTips
+        Disable-WidgetsButton
+        Disable-SearchBox
+        Set-StartFolders
+        UnPin-Apps
         }
       
     
