@@ -1,18 +1,15 @@
 function Start-UserSetup {
     <#
         .SYNOPSIS 
-            This script imports HTML local files and exports as CSV in the local folder.
+            This script configures initial user settings and defaults
         .DESCRIPTION
-            This script utilizes Import-HTML from the power
+            This script configures initial user settings and defaults
     #>
         [CmdletBinding()]
         param (
             [parameter(mandatory=$true)]
             [Validateset("All","Alignleft","Aligncenter","Unpinall","")]
-            [string]$Startaction,
-    
-            [Parameter(mandatory=$true)]
-            [string]$Outfile
+            [string]$Startacions
         )
     
         begin {
@@ -124,7 +121,13 @@ function Start-UserSetup {
 
 
             if ($Startaction -eq "All")
-
+                Set-TaskbarAlignleft
+                Disable-CopilotButton
+                Disable-LockscreenTips
+                Disable-WidgetsButton
+                Disable-SearchBox
+                Set-StartFolders
+                UnPin-Apps
         }
       
     
