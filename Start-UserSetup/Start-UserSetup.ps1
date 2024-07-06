@@ -33,19 +33,7 @@ function Start-UserSetup {
                     New-ItemProperty -Path $RegKey -Name $RegName -Value $RegValue -PropertyType DWORD -Force | Out-Null
                 } 
             }
-            function Set-TaskbarAlignCenter {
-                $RegKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-                $RegName = "TaskbarAl"
-                $RegValue = "00000000"    
-                # Create Subkeys if they don't exist
-                if (!(Test-Path $RegKey)) {
-                    New-Item -Path $RegKey -Force | Out-Null
-                    New-ItemProperty -Path $RegKey -Name $RegName -Value $RegValue -PropertyType DWORD -Force | Out-Null
-                }
-                else {
-                    New-ItemProperty -Path $RegKey -Name $RegName -Value $RegValue -PropertyType DWORD -Force | Out-Null
-                } 
-            }
+
             function Disable-CopilotButton {
                 $RegKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
                 $RegName = "ShowCopilotButton"
@@ -59,6 +47,7 @@ function Start-UserSetup {
                     New-ItemProperty -Path $RegKey -Name $RegName -Value $RegValue -PropertyType DWORD -Force | Out-Null
                 } 
             }
+
             function Disable-LockscreenTips {
                 $RegKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
                 $RegName = "SubscribedContent-338387Enabled"
@@ -76,6 +65,7 @@ function Start-UserSetup {
                     New-ItemProperty -Path $RegKey -Name $RegName2 -Value $RegValue2 -PropertyType DWORD -Force | Out-Null
                 } 
             }
+
             function Disable-WidgetsButton {
                 $RegKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
                 $RegName = "TaskbarDa"
@@ -89,6 +79,7 @@ function Start-UserSetup {
                     New-ItemProperty -Path $RegKey -Name $RegName -Value $RegValue -PropertyType DWORD -Force | Out-Null
                 } 
             }
+
             function Disable-SearchBox {
                 $RegKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Search"
                 $RegName = "SearchboxTaskbarMode"
@@ -102,6 +93,7 @@ function Start-UserSetup {
                     New-ItemProperty -Path $RegKey -Name $RegName -Value $RegValue -PropertyType DWORD -Force | Out-Null
                 } 
             }
+
             function Set-StartFolders {
                 $RegKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Start"
                 $RegName = "VisiblePlaces"
@@ -116,7 +108,8 @@ function Start-UserSetup {
                     Set-ItemProperty -Path $RegKey -Name $RegName -Value ([byte[]]($RegValue)) -Type Binary -Force | Out-Null
                 } 
             }
-            function UnPin-App { 
+
+            function UnPin-Apps { 
                 $apps = 'Microsoft Edge', 'Microsoft Store'
                 foreach ( $appname in $apps) {
                     try {
