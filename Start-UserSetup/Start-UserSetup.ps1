@@ -129,6 +129,18 @@ function Start-UserSetup {
                     }
                 }
             }
+            
+            function Set-OfficeShortcuts {
+                $path = "C:\Programdata\Microsoft\Windows\Start Menu\Programs"
+                $shortcuts = @{
+                $Word = "Word.lnk"
+                $Outlook = "Outlook.lnk"
+                $Excel = "Excel.lnk"
+                }
+                foreach ($shortcut in $shortcuts) {
+                    Copy-Item -Path "$path\$shortcut" -Destination "$($env:USERPROFILE)\Desktop" -Force
+                }
+            }
 
         Set-TaskbarAlignleft
         Disable-TaskView
