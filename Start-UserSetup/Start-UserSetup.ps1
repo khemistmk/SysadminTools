@@ -117,26 +117,17 @@ function Start-UserSetup {
                 } 
             }
 
-            function UnPin-Apps { 
-                $apps = @('Microsoft Edge', 'Microsoft Store')
-                foreach ( $appname in $apps) {
-                    try {
-                        ((New-Object -Com Shell.Application).NameSpace('shell:::{4234d49b-0245-4df3-b780-3893943456e1}').Items() | ?{$_.Name -eq $appname}).Verbs() | ?{$_.Name.replace('&','') -match 'Unpin from taskbar'} | %{$_.DoIt()}
-                    return "App '$appname' unpinned from Taskbar"
-                    }        
-                    catch {
-                    Write-Error "Error Unpinning App! (App-Name correct?)"
-                    }
+            function Remove-TaskbarApps { 
+                $apps = 'Microsoft Edge','Microsoft Store'
+                foreach ($appname in $apps){    
+                    ((New-Object -Com Shell.Application).NameSpace('shell:::{4234d49b-0245-4df3-b780-3893943456e1}').Items() | ?{$_.Name -eq $appname}).Verbs() | ?{$_.Name.replace('&','') -match 'Unpin from taskbar'} | %{$_.DoIt()}
+                    Write-Host "App '$appname' unpinned from Taskbar"
                 }
             }
             
             function Set-OfficeShortcuts {
                 $path = "C:\Programdata\Microsoft\Windows\Start Menu\Programs"
-                $shortcuts = @{
-                $Word = "Word.lnk"
-                $Outlook = "Outlook.lnk"
-                $Excel = "Excel.lnk"
-                }
+                $shortcuts = "Word.lnk", "Outlook.lnk", "Excel.lnk"
                 foreach ($shortcut in $shortcuts) {
                     Copy-Item -Path "$path\$shortcut" -Destination "$($env:USERPROFILE)\Desktop" -Force
                 }
@@ -149,7 +140,8 @@ function Start-UserSetup {
         Disable-WidgetsButton
         Disable-SearchBox
         Set-StartFolders
-        UnPin-Apps
+        Remove-TaskbarApps
+        Set-OfficeShortcuts
         }
       
     
