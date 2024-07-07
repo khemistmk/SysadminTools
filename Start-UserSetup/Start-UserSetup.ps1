@@ -128,6 +128,17 @@ function Start-UserSetup {
                 }
             }
             
+            function Add-TaskbarApps { 
+                $apps = 'Google Chrome','Microsoft Outlook'
+                foreach ($appname in $apps){    
+                    ((New-Object -Com Shell.Application).NameSpace('shell:::{4234d49b-0245-4df3-b780-3893943456e1}').Items() |
+                    Where-Object {$_.Name -eq $appname}).Verbs() |
+                    Where-Object {$_.Name.replace('&','') -match 'Pin to taskbar'} |
+                    ForEach-Object {$_.DoIt()}
+                    Write-Host "App '$appname' pinned to Taskbar"
+                }
+            }
+
             function Set-OfficeShortcuts {
                 $path = "C:\Programdata\Microsoft\Windows\Start Menu\Programs"
                 $shortcuts = "Word.lnk", "Outlook.lnk", "Excel.lnk"
