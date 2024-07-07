@@ -140,8 +140,8 @@ function Start-UserSetup {
 
             function Remove-OutlooknewandTeams {
                 Get-AppxPackage | Where-Object {$_.Name -eq 'MicrosoftTeams'} | Remove-AppxPackage
-                Get-AppxPackage | Where-Object {$_.Name -Like 'Microsoft.OutlookForWindows'} | Remove-AppxPackage
-                Get-AppxPackage | Where-Object {$_.Name -Like 'Microsoft.MicrosoftOfficeHub'} | Remove-AppxPackage
+                Get-AppxPackage | Where-Object {$_.Name -eq 'Microsoft.OutlookForWindows'} | Remove-AppxPackage
+                Get-AppxPackage | Where-Object {$_.Name -eq 'Microsoft.MicrosoftOfficeHub'} | Remove-AppxPackage
             }
 
         Set-TaskbarAlignleft
