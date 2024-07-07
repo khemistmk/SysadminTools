@@ -118,7 +118,7 @@ function Start-UserSetup {
             }
 
             function Remove-TaskbarApps { 
-                $apps = 'Microsoft Edge','Microsoft Store'
+                $apps = 'Microsoft Edge','Microsoft Store', 'Office (new)'
                 foreach ($appname in $apps){    
                     ((New-Object -Com Shell.Application).NameSpace('shell:::{4234d49b-0245-4df3-b780-3893943456e1}').Items() |
                     Where-Object {$_.Name -eq $appname}).Verbs() |
@@ -132,8 +132,15 @@ function Start-UserSetup {
                 $path = "C:\Programdata\Microsoft\Windows\Start Menu\Programs"
                 $shortcuts = "Word.lnk", "Outlook.lnk", "Excel.lnk"
                 foreach ($shortcut in $shortcuts) {
-                    Copy-Item -Path "$path\$shortcut" -Destination "$($env:USERPROFILE)\Desktop" -Force
+                    if (Test-Path "$path\$shortcut"){
+                        Copy-Item -Path "$path\$shortcut" -Destination "$($env:USERPROFILE)\Desktop" -Force
+                    }
                 }
+            }
+
+            function Remove-OutlooknewandTeams {
+                Get-AppxPackage | Where-Object {$_.Name -eq 'MicrosoftTeams'} | Remove-AppxPackage
+                Get-AppxPackage | Where-Object {$_.Name -Like 'Microsoft.OutlookForWindows'} | Remove-AppxPackage
             }
 
         Set-TaskbarAlignleft
@@ -145,6 +152,7 @@ function Start-UserSetup {
         Set-StartFolders
         Remove-TaskbarApps
         Set-OfficeShortcuts
+        Remove-OutlooknewandTeams
         }
       
     
