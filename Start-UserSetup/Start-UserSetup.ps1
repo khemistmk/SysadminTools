@@ -144,6 +144,20 @@ function Start-UserSetup {
                 Get-AppxPackage | Where-Object {$_.Name -eq 'Microsoft.MicrosoftOfficeHub'} | Remove-AppxPackage
             }
 
+            function Disable-NewOutlookButton {
+                $RegKey = "HKCU:\Software\Microsoft\Office\16.0\Outlook\Options\General"
+                $RegName = "HideNewOutlookToggle"
+                $RegValue = "00000001"    
+                # Create Subkeys if they don't exist
+                if (!(Test-Path $RegKey)) {
+                    New-Item -Path $RegKey -Force | Out-Null
+                    New-ItemProperty -Path $RegKey -Name $RegName -Value $RegValue -PropertyType DWORD -Force | Out-Null
+                }
+                else {
+                    New-ItemProperty -Path $RegKey -Name $RegName -Value $RegValue -PropertyType DWORD -Force | Out-Null
+                } 
+            }
+
         Set-TaskbarAlignleft
         Disable-TaskView
         Disable-CopilotButton
@@ -154,6 +168,7 @@ function Start-UserSetup {
         Remove-TaskbarApps
         Set-OfficeShortcuts
         Remove-OutlooknewandTeams
+        Disable-NewOutlookButton
         }
       
     
