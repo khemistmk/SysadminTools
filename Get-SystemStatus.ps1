@@ -304,5 +304,5 @@ function Get-SystemStatus {
     }
     end {
     }
-  Get-SystemStatus
-    }
+}
+Get-SystemStatus
