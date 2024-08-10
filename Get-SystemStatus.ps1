@@ -6,23 +6,36 @@ function Get-SystemStatus {
         
     )
 
-    begin {   
+    begin {  
+        #Get today's date 
         $date = Get-Date
-        $serialnumber = (Get-WmiObject -Class Win32_BIOS | Select-Object -Property SerialNumber).serialnumber
-        $computername = (Get-WmiObject -Class Win32_Operatingsystem).PSComputerName
-        $winver = (Get-CimInstance -ClassName Win32_OperatingSystem).Caption
-        $licensestatus = Get-CimInstance -ClassName SoftwareLicensingProduct -Filter "PartialProductKey IS NOT NULL" | Where-Object -Property Name -Like "Windows*"
+
+        #Get Administrator Status
         $Admin = (Get-LocalUser -Name "Administrator").Enabled
-        $manufacturer = (Get-CimInstance -ClassName Win32_ComputerSystem).manufacturer
-        $model = (Get-CimInstance -Namespace root\wmi -ClassName MS_SystemInformation).SystemVersion
-        $CPUInfo = (Get-CimInstance Win32_Processor).name
-        $RAM = Get-CimInstance win32_ComputerSystem | ForEach-Object {[math]::round($_.TotalPhysicalMemory /1GB)}
-        $drivesize = Get-PhysicalDisk | ForEach-Object {[math]::round($_.size /1GB)}
-        $Drivemanufacturer = Get-PhysicalDisk | Select-Object -ExpandProperty FriendlyName
-        $drivebrand,$driveserial = $Drivemanufacturer -split " "
-        $Drivetype = Get-PhysicalDisk | Select-Object -ExpandProperty MediaType
-        $Bustype = Get-PhysicalDisk | Select-Object -ExpandProperty Bustype
-        $graphics = (Get-CimInstance -ClassName Win32_VideoController).Description | Out-String
+        
+        #Create CIMSession and call classes
+        $cimsession = New-CimSession
+        $CIMBIOS = Get-CimInstance -ClassName Win32_BIOS -CimSession $cimsession
+        $CIMOS = Get-CimInstance -ClassName Win32_Operatingsystem -CimSession $cimsession
+        $CIMComp = Get-CIMInstance -ClassName Win32_ComputerSystem -CimSession $cimsession
+        $CIMVideo = Get-CimInstance -ClassName Win32_VideoController -CimSession $cimsession
+        $RAMinfo = Get-CimInstance -Classname Win32_PhysicalMemory -CimSession $cimsession
+        
+        #Reference called classes to assign variables
+        $serialnumber = $CIMBIOS.SerialNumber
+        $computername = $CIMOS.PSComputerName
+        $winver = $CIMOS.Caption
+        $manufacturer = $CIMComp.manufacturer
+        $RAM = $CIMComp | ForEach-Object {[math]::round($_.TotalPhysicalMemory /1GB)}
+    
+        #Additional CimInstance calls and variable assignment
+        $model = (Get-CimInstance -Namespace root\wmi -ClassName MS_SystemInformation -CimSession $cimsession).SystemVersion
+        $CPUInfo = (Get-CimInstance Win32_Processor -CimSession $cimsession).name
+        $licensestatus = Get-CimInstance -ClassName SoftwareLicensingProduct -CimSession $cimsession -Filter "PartialProductKey IS NOT NULL" | Where-Object -Property Name -Like "Windows*"
+        
+       
+        #Registry calls and variable assignment
+        $Winbuild = (Get-Item "HKLM:SOFTWARE\Microsoft\Windows NT\CurrentVersion").GetValue('DisplayVersion')
         $OEM =  Get-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\OEMInformation" | Select-Object -Property Manufacturer,SupportHours,SupportPhone,SupportURL
         $oemman = $OEM.Manufacturer
         $oemhours = $OEM.SupportHours
@@ -32,22 +45,34 @@ function Get-SystemStatus {
         $fsPath = "HKLM:\System\CurrentControlSet\Control\Session Manager\Power"
         $fsName = "HiberbootEnabled"
         $fsvalue = (Get-ItemProperty -Path $fsPath -Name $fsName).HiberbootEnabled
-        $RAMinfo = Get-CimInstance -Classname Win32_PhysicalMemory
-        $ramcap = $RAMinfo | ForEach-Object {[math]::round($_.Capacity /1GB)}
-        $ramman = $RAMinfo.Manufacturer
-        $ramloc = $RAMinfo.DeviceLocator
-        $ramspeed = $RAMinfo.Speed
-        $ramchannel = $RAMinfo.InterleaveDataDepth
-            }
+
+        #Physical disk information
+        $Driveinfo = Get-PhysicalDisk
+    }
     process {
+        #check license status
         if ($licensestatus.LicenseStatus -eq 1){
             $winactivation = "Activated"
         }
+        #Round drive sizes based on capacity to standard sizes
         if (($drivesize -gt "459")-and ($drivesize -lt "468")) { $Drive = "500 GB"}
         if (($drivesize -gt "469") -and ($drivesize -lt "479")) { $Drive = "512 GB"}
         if (($drivesize -gt "929") -and ($drivesize -lt "1024")) { $Drive = "1 TB"}
         if (($drivesize -gt "1800") -and ($drivesize -lt "2048")) { $Drive = "2 TB"}
        
+        #Get BIOS information based on manufacturer
+        if ($manufacturer -eq "Lenovo") {
+            $bios = $CIMComp.OEMStringArray
+            $b = $bios | Where-Object -FilterScript {$_ -like "*BIOS Boot Block Revision*"}
+            $b1,$b2 = $b -split "Revision"
+            $biosver = $b | Select-Object -Last 4
+        }
+        else {
+            $bios = $CIMBIOS.Name
+            $b1,$biosver = $bios -split "Ver."
+        }
+
+        #Get list of installed programs
         $Programs = @()
         $Programlist = @(
                         "Adobe Acrobat",
@@ -69,6 +94,8 @@ function Get-SystemStatus {
             $Programs += (Get-Package | Where-Object {$_.Name -like "*$p*"}).Name
         }
         $plist = $Programs | Out-String
+
+        #Set variable status based on parameter values
         if (!$Admin) {
             $Adminstatus = "Disabled"
         }
@@ -111,99 +138,171 @@ function Get-SystemStatus {
         else {
             $SmartDeploy = "Not Removed"
         }
-        $ramchan = @()
-        foreach ($r in $ramchannel){
-            if ($r -eq "2") {
-                $ramchan += "Dual Channel"
-            }
-            else {
-                $ramchan += "Single Channel"
-            }
+
+        #Set Computer information PSCustomObject
+        $Compinfo = [PSCustomObject]@{
+            DeploymentDate      =   $date
+            SerialNumber        =   $serialnumber
+            ComputerName        =   $computername
+        }
+        
+        #Set Activation information PSCustomObject
+        $Activationinfo = [PSCustomObject]@{
+            WindowsVersion      =   $winver
+            WindowsBuild        =   $Winbuild
+            WindowsActivation   =   $winactivation
+
         }
 
-        $RAM1 = $ramcap[0],"GB",$ramman[0],$ramspeed[0],"GHz", $ramchan[0],$ramloc[0]
-        $RAM2 = $ramcap[1],"GB",$ramman[1],$ramspeed[1],"GHz", $ramchan[0],$ramloc[1]
-        $RAM3 = $ramcap[2],"GB",$ramman[2],$ramspeed[2],"GHz", $ramchan[0],$ramloc[2]
-        $RAM4 = $ramcap[3],"GB",$ramman[3],$ramspeed[3],"GHz", $ramchan[0],$ramloc[3]
+        #Set Manufacturer informatino PSCustomObject
+        $Manufacturerinfo = [PSCustomObject]@{
+            Manufacturer        =   $manufacturer
+            Model               =   $model
+        }
 
-        $montimeoutac,$montimeoutdc = powercfg @(
-            '/query'
-            'scheme_current'
-            '7516b95f-f776-4464-8c53-06167f40cc99'
-            '3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e'
-        ) |
-        Select-Object -Last 2 -Skip 1 |
-        Foreach-Object {($_.Split(':')[1]) /60}
+        #Set Hardware information PSCustomObject
+        $Hardwareinfo = [PSCustomObject]@{
+            CPU                 =   $CPUInfo
+            TotalRAM            =   "$RAM GB"
+            BIOSVersion         =   $biosver
+        }
+
+        #Set OEM information PSCustomObject
+        $OEMinfo = [PSCustomObject]@{
+            Manufacturer        =   $oemman
+            SupportHours        =   $oemhours
+            SupportPhone        =   $oemphone
+            SupportURL          =   $oemurl 
+        }
+
+        #Set Deployment Tasks information PSCustomObject
+        $Deployment = [PSCustomObject]@{
+            Bitlocker       =   $bit
+            Platformfolder  =   $platform
+            OEMfolder       =   $OEMfolder
+            Administrator   =   $Adminstatus
+            Dotnet3         =   $dotnet
+            FastStartup    =   $faststart
+            SmartDeploy     =   $SmartDeploy
+        }
+
+        #Set Power Options informatino PSCustomObject
+        $PowerOptions = [PSCustomObject]@{  
+            MonitorTimeoutDC    =   "$montimeoutdc Minutes"
+            MonitorTimeoutAC    =   "$montimeoutac Minutes"
+            SleepTimeoutDC      =   "$sleeptimeoutdc Minutes"
+            SleepTimeoutAC      =   "$sleeptimeoutac Minutes"
+        }
+        #Set RAM information PSCustomObject
+        $RAM =  foreach ($r in $RAMinfo){
+                    $ramcap = $r | ForEach-Object {[math]::round($_.Capacity /1GB)}
+                    $ramman = $r.Manufacturer
+                    $ramloc = $r.DeviceLocator
+                    $ramspeed = $r.Speed
+                    if ($r.InterleaveDataDepth -eq "2"){
+                        $ramchan = "Dual Channel"
+                    }
+                    else {
+                        $ramchan = "Single Channel"
+                    }
+                    [pscustomobject]@{
+                    Capacity        =   "$ramcap GB"
+                    Manufacturer    =   $ramman
+                    Speed           =   $ramspeed
+                    Channel         =   $ramchan
+                    Location        =   $ramloc
+                    }
+                } 
+        $RAMinfo = $RAM | Format-Table
+
+        #Set drive information PSCustomObject
+        $Driveinfo =    foreach ($d in $diskinfo){
+	                        $drivesize = $d | ForEach-Object {[math]::round($_.size /1GB)}
+	                        $driveman = $d.FriendlyName
+	                        $drivebrand,$driveserial = $driveman -split " "
+	                        $drivetype = $d.MediaType
+	                        $drivebus = $d.Bustype
+	                        if (($drivesize -gt "459")-and ($drivesize -lt "468")) { $Drive = "500 GB"}
+                            if (($drivesize -gt "469") -and ($drivesize -lt "479")) { $Drive = "512 GB"}
+                            if (($drivesize -gt "929") -and ($drivesize -lt "1024")) { $Drive = "1 TB"}
+                            if (($drivesize -gt "1800") -and ($drivesize -lt "2048")) { $Drive = "2 TB"}
+	                        [pscustomobject]@{
+		                        Size	=	$Drive
+		                        Brand	=	$drivebrand
+		                        Form	=	$drivebus
+		                        Type	=	$drivetype
+	                        }
+                        }
         
-        $sleeptimeoutac,$sleeptimeoutdc = powercfg @(
+        #Set GPU information PSCustomObject
+        $Graphicsinfo = foreach ($v in $CIMVideo){
+                            $GPU 	        =	$v.description
+                            $DriverVersion  =	$v.DriverVersion
+                            [pscustomobject]@{
+                                GPU	            =	$GPU
+                                DriverVersion	=	$DriverVersion    
+                            }
+                        }
+        
+        
+        #Monitor timeout powercfg parameters
+        $monparam = @(
             '/query'
-            'scheme_current'
-            '238c9fa8-0aad-41ed-83f4-97be242c8f20'
-            '29f6c1db-86da-48c5-9fdb-f2b67b1f44da'
-        ) |
-        Select-Object -Last 2 -Skip 1 |
-        Foreach-Object {($_.Split(':')[1]) /60}
-
-
-    $Report = @"
-
-**************************************************************    
-Deployment Date:            $date
-Serial Number:              $SerialNumber
-Computer Name:              $computername
-
-Activation Information
-**************************************************************
-Windows Version:            $winver
-Windows Activation:         $winactivation
-
-Hardware Information
-**************************************************************
-Manufacturer:               $manufacturer
-Model:                      $model
-CPU:                        $CPUInfo
-Ram Info:
-            Total RAM:      $RAM GB
-                            $RAM1
-                            $RAM2
-                            $RAM3
-                            $RAM4
-Drive:                      $Drive $drivebrand $Bustype $Drivetype                           
-Graphics:                   $graphics
-
-Deployment Tasks
-**************************************************************
-OEM Info:   
-            Manufacturer:   $oemman
-            Support Hours:  $oemhours
-            Support Phone:  $oemphone
-            Support URL:    $oemurl 
-
-Bitlocker:                  $bit
-Platform folder:            $platform
-OEM folder:                 $OEMfolder
-Administrator:              $Adminstatus
-Dotnet 3.5:                 $dotnet
-Fast Startup:               $faststart
-SmartDeploy:                $SmartDeploy
-
-Power Options:  
-    Monitor Timeout Battery:    $montimeoutdc Minutes
-    Monitor Timeout Plugged in: $montimeoutac Minutes
-    Sleep Timeout Battery:      $sleeptimeoutdc Minutes
-    Sleep Timeout Plugged in:   $sleeptimeoutac Minutes 
-
-Installed Software
-**************************************************************
-$plist
-"@
+            'scheme_current' 
+             '7516b95f-f776-4464-8c53-06167f40cc99'
+            '3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e'
+        )
+        $montimeoutac,$montimeoutdc =   powercfg @monparam |
+                                            Select-Object -Last 2 -Skip 1 |
+                                                Foreach-Object {($_.Split(':')[1]) /60}
+        
+        #Sleep timeout powercfg parameters
+        $sleepparam = @(
+            '/query'
+            'scheme_current' 
+             '7516b95f-f776-4464-8c53-06167f40cc99'
+            '3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e'
+        )
+        $sleeptimeoutac,$sleeptimeoutdc =   powercfg @sleepparam |
+                                                Select-Object -Last 2 -Skip 1 |
+                                                    Foreach-Object {($_.Split(':')[1]) /60}
+        
+        #Define keysfile location
         $keystext = Get-Content -Path $SaveLocation\keys.txt
-        $Systeminfo = $keystext + $Report
-        $Systeminfo | Out-File "$SaveLocation\$computername.txt" -Append
+        
+        #Output System Status report to text file
+        $SystemStatus = $keystext
+        $SystemStatus | Out-File "$SaveLocation\$computername.txt"
+        $Systeminfofile = "$SaveLocation\$computername.txt"
+        
+        #Append content to text file
+        Add-Content -Path $Systeminfofile "`n**************************************************************"
+        Add-Content -Path $Systeminfofile $($Compinfo | Format-List)
+        Add-Content -Path $Systeminfofile "Activation Information"
+        Add-Content -Path $Systeminfofile "`n**************************************************************"
+        Add-Content -Path $Systeminfofile $($Activationinfo | Format-List)
+        Add-Content -Path $Systeminfofile "Hardware Information"
+        Add-Content -Path $Systeminfofile "`n**************************************************************"
+        Add-Content -Path $Systeminfofile $($Manufacturerinfo | Format-List)
+        Add-Content -Path $Systeminfofile $($Hardwareinfo | Format-List)
+        Add-Content -Path $Systeminfofile "DIMM Information:"
+        Add-Content -Path $Systeminfofile $($RAMInfo | Out-String)
+        Add-Content -Path $Systeminfofile "Disk Information:"
+        Add-Content -Path $Systeminfofile $($DriveInfo | Out-String)
+        Add-Content -Path $Systeminfofile "Graphics Processors:"
+        Add-Content -Path $Systeminfofile $($Graphicsinfo | Out-String)
+        Add-Content -Path $Systeminfofile "Deployment Tasks"
+        Add-Content -Path $Systeminfofile "`n**************************************************************"
+        Add-Content -Path $Systeminfofile "OEM Informaton:"
+        Add-Content -Path $Systeminfofile $($OEMinfo | Format-List)
+        Add-Content -Path $Systeminfofile $($Deployment | Format-List)
+        Add-Content -Path $Systeminfofile "Power Settings:"
+        Add-Content -Path $Systeminfofile $($PowerOptions | Format-List)
+        Add-Content -Path $Systeminfofile "Installed Software"
+        Add-Content -Path $Systeminfofile "`n**************************************************************"
+        Add-Content -Path $Systeminfofile $plist
     }
     end {
-
     }
-}
-Get-SystemStatus
-Remove-Item $PSCommandPath -Force 
+  Get-SystemStatus
+    }
