@@ -30,18 +30,23 @@ function Get-SystemStatus {
         $RAM = $CIMComp | ForEach-Object {[math]::round($_.TotalPhysicalMemory /1GB)}
     
         #Additional CimInstance calls and variable assignment
-        $model = (Get-CimInstance -Namespace root\wmi -ClassName MS_SystemInformation -CimSession $cimsession).SystemVersion
+        $lenovomodel = (Get-CimInstance -Namespace root\wmi -ClassName MS_SystemInformation -CimSession $cimsession).SystemVersion
         $CPUInfo = (Get-CimInstance Win32_Processor -CimSession $cimsession).name
-        $licensestatus = Get-CimInstance -ClassName SoftwareLicensingProduct -CimSession $cimsession -Filter "PartialProductKey IS NOT NULL" | Where-Object -Property Name -Like "Windows*"
+        $licensestatus = Get-CimInstance -ClassName SoftwareLicensingProduct -CimSession $cimsession -Filter "PartialProductKey IS NOT NULL" |
+            Where-Object -Property Name -Like "Windows*"
         
         #Registry calls and variable assignment
         $Winbuild = (Get-Item "HKLM:SOFTWARE\Microsoft\Windows NT\CurrentVersion").GetValue('DisplayVersion')
-        $OEM =  Get-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\OEMInformation" | Select-Object -Property Manufacturer,SupportHours,SupportPhone,SupportURL
+        $OEM =  Get-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\OEMInformation" |
+            Select-Object -Property Manufacturer,SupportHours,SupportPhone,SupportURL
         $oemman = $OEM.Manufacturer
         $oemhours = $OEM.SupportHours
         $oemphone = $OEM.SupportPhone
         $oemurl = $OEM.SupportURL
-        $dotnet3 = (Get-ChildItem -Path 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP' -Recurse | Get-ItemProperty -Name 'Version' -ErrorAction SilentlyContinue | ForEach-Object {$_.Version -as [System.Version]} | Where-Object {$_.Major -eq 3 -and $_.Minor -eq 5}).Count -ge 1
+        $dotnet3 = (Get-ChildItem -Path 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP' -Recurse |
+            Get-ItemProperty -Name 'Version' -ErrorAction SilentlyContinue |
+                ForEach-Object {$_.Version -as [System.Version]} |
+                    Where-Object {$_.Major -eq 3 -and $_.Minor -eq 5}).Count -ge 1
         $fsPath = "HKLM:\System\CurrentControlSet\Control\Session Manager\Power"
         $fsName = "HiberbootEnabled"
         $fsvalue = (Get-ItemProperty -Path $fsPath -Name $fsName).HiberbootEnabled
@@ -69,10 +74,12 @@ function Get-SystemStatus {
             $b = $bios | Where-Object -FilterScript {$_ -like "*BIOS Boot Block Revision*"}
             $b1,$b2 = $b -split "Revision"
             $biosver = $b | Select-Object -Last 4
+            $model = $lenovomodel
         }
         else {
             $bios = $CIMBIOS.Name
             $b1,$biosver = $bios -split "Ver."
+            $model = $CIMComp.Model
         }
 
         #Get list of installed programs
@@ -265,10 +272,24 @@ function Get-SystemStatus {
                             default {$defstatus = "Unknown" ;$rtstatus = "Unknown"}
                         }
                         switch ($AV.DisplayName){
-                            'Sophos Intercept X' {$avversion = $programs | Where-Object {($_.Name -eq "Sophos Endpoint Agent") -and ($_.ProviderName -eq "Programs")} | Select-Object -ExpandProperty Version}
-                            'Sophos Home' {$avversion = $programs | Where-Object {($_.Name -eq "Sophos Home") -and ($_.ProviderName -eq "Programs")} | Select-Object -ExpandProperty Version}
-                            'Windows Defender' {$avversion = (Get-MpComputerStatus).AMProductVersion}
-                            default {$avversion = $programs | Where-Object { ($_.Name -like "*$($($av -split ' ')[0])*") -and ($_.ProviderName -eq "Programs")} | Select-Object -ExpandProperty Version}
+                            'Sophos Intercept X' {
+                                $avversion = $programs |
+                                    Where-Object {($_.Name -eq "Sophos Endpoint Agent") -and ($_.ProviderName -eq "Programs")} |
+                                     Select-Object -ExpandProperty Version
+                            }
+                            'Sophos Home' {
+                                $avversion = $programs |
+                                    Where-Object {($_.Name -eq "Sophos Home") -and ($_.ProviderName -eq "Programs")} |
+                                        Select-Object -ExpandProperty Version
+                            }
+                            'Windows Defender' {
+                                $avversion = (Get-MpComputerStatus).AMProductVersion
+                            }
+                            default {
+                                $avversion = $programs |
+                                    Where-Object { ($_.Name -like "*$($($av -split ' ')[0])*") -and ($_.ProviderName -eq "Programs")} |
+                                        Select-Object -ExpandProperty Version
+                            }
                         }
                         [PSCustomObject]@{
                             Name = $Av.DisplayName
