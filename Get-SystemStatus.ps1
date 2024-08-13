@@ -1,3 +1,49 @@
+<#PSScriptInfo
+
+.VERSION 1.0
+
+.GUID 42ad7a43-1e35-4764-897d-83ad6435a21e
+
+.AUTHOR Timothy Wilson
+
+.COMPANYNAME 
+
+.COPYRIGHT
+
+.TAGS
+
+.LICENSEURI 
+
+.PROJECTURI
+
+.ICONURI 
+
+.EXTERNALMODULEDEPENDENCIES 
+
+.REQUIREDSCRIPTS 
+
+.EXTERNALSCRIPTDEPENDENCIES 
+
+.RELEASENOTES
+Version 1.0: Original published version
+
+#>
+<#
+.SYNOPSIS
+ This script will gather information about the local machine and output results to a text file.
+
+.DESCRIPTION
+ This script will gather information about the local machine and output results to a text file.
+
+.PARAMETER SaveLocatoin
+ Specifies the save location for the output text file.
+
+.EXAMPLE
+ .\Get-SystemStatus.ps1
+.EXAMPLE
+ .\Get-SystemStatus.ps1 -SaveLocation "C:\Users\User\Documents\"
+ 
+#>
 function Get-SystemStatus {
     [CmdletBinding()]
     param (
