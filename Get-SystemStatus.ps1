@@ -258,7 +258,7 @@ function Get-SystemStatus {
 
         #Set Antivirus infomation PSCustomObject          
         $AVinfo =   foreach($Av in $AVProd){
-                 <#       switch ($AV.productState) {
+                        switch ($AV.productState) {
                             "262144" {$defstatus = "Up to date" ;$rtstatus = "Disabled"}
                             "262160" {$defstatus = "Out of date" ;$rtstatus = "Disabled"}
                             "266240" {$defstatus = "Up to date" ;$rtstatus = "Enabled"}
@@ -269,14 +269,12 @@ function Get-SystemStatus {
                             "397312" {$defstatus = "Up to date" ;$rtstatus = "Enabled"}
                             "397328" {$defstatus = "Out of date" ;$rtstatus = "Enabled"}
                             "397584" {$defstatus = "Out of date" ;$rtstatus = "Enabled"}
-
-"397568" {$defstatus = "Up to date"; $rtstatus = "Enabled"}
-
-"393472" {$defstatus = "Up to date"; $rtstatus = "Disabled"}
+                            "397568" {$defstatus = "Up to date"; $rtstatus = "Enabled"}
+                            "393472" {$defstatus = "Up to date"; $rtstatus = "Disabled"}
                             default {$defstatus = "Unknown" ;$rtstatus = "Unknown"}
-                        } #>
+                        }
 
-            $hx = '0x{0:x}' -f $Av.ProductState
+            <#$hx = '0x{0:x}' -f $Av.ProductState
             $mid = $hx.Substring(3, 2)
             if ($mid -match "00|01") {
                 $rtstatus = "Disabled"
@@ -290,7 +288,7 @@ function Get-SystemStatus {
             }
             else {
                 $defstatus = "Up to date"
-            }
+            }#>
                         switch ($AV.DisplayName){
                             'Sophos Intercept X' {
                                 $avversion = $programs |
