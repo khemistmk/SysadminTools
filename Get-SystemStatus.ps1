@@ -105,15 +105,7 @@ function Get-SystemStatus {
         if ($licensestatus.LicenseStatus -eq 1){
             $winactivation = "Activated"
         }
-        #Round drive sizes based on capacity to standard sizes
-        if ($drivesize -lt "100") { $Drive = "$drivesize GB"}
-        if (($drivesize -gt "100")-and ($drivesize -lt "128")) { $Drive = "128 GB"}
-        if (($drivesize -gt "230")-and ($drivesize -lt "256")) { $Drive = "256 GB"}
-        if (($drivesize -gt "459")-and ($drivesize -lt "468")) { $Drive = "500 GB"}
-        if (($drivesize -gt "469") -and ($drivesize -lt "479")) { $Drive = "512 GB"}
-        if (($drivesize -gt "929") -and ($drivesize -lt "1024")) { $Drive = "1 TB"}
-        if (($drivesize -gt "1800") -and ($drivesize -lt "2048")) { $Drive = "2 TB"}
-       
+      
         #Get BIOS information based on manufacturer
         if ($manufacturer -eq "Lenovo") {
             $bios = $CIMComp.OEMStringArray
@@ -276,19 +268,19 @@ function Get-SystemStatus {
         #Set drive information PSCustomObject
         $Driveinfo =    foreach ($d in $diskinfo){
 	                        $drivesize = $d | ForEach-Object {[math]::round($_.size /1GB)}
-	                        $driveman = $d.FriendlyName
-	                        $drivebrand,$driveserial = $driveman -split " "
-	                        $drivetype = $d.MediaType
-	                        $drivebus = $d.Bustype
+                            if ($drivesize -lt "100") { $Drive = "$drivesize GB"}
+                            if (($drivesize -gt "100")-and ($drivesize -lt "128")) { $Drive = "128 GB"}
+                            if (($drivesize -gt "230")-and ($drivesize -lt "256")) { $Drive = "256 GB"}
 	                        if (($drivesize -gt "459")-and ($drivesize -lt "468")) { $Drive = "500 GB"}
                             if (($drivesize -gt "469") -and ($drivesize -lt "479")) { $Drive = "512 GB"}
                             if (($drivesize -gt "929") -and ($drivesize -lt "1024")) { $Drive = "1 TB"}
                             if (($drivesize -gt "1800") -and ($drivesize -lt "2048")) { $Drive = "2 TB"}
 	                        [pscustomobject]@{
+                                Name    =   $d.FriendlyName
 		                        Size	=	$Drive
 		                        Brand	=	$drivebrand
-		                        Form	=	$drivebus
-		                        Type	=	$drivetype
+		                        Form	=	$d.Bustype
+		                        Type	=	$d.MediaType
 	                        }
                         }
         
@@ -319,22 +311,6 @@ function Get-SystemStatus {
                             "393472" {$defstatus = "Up to date"; $rtstatus = "Disabled"}
                             default {$defstatus = "Unknown" ;$rtstatus = "Unknown"}
                         }
-
-            <#$hx = '0x{0:x}' -f $Av.ProductState
-            $mid = $hx.Substring(3, 2)
-            if ($mid -match "00|01") {
-                $rtstatus = "Disabled"
-            }
-            else {
-                $rtstatus = "Enabled"
-            }
-            $end = $hx.Substring(5)
-            if ($end -eq "00") {
-                $defstatus = "Out of date"
-            }
-            else {
-                $defstatus = "Up to date"
-            }#>
                         switch ($AV.DisplayName){
                             'Sophos Intercept X' {
                                 $avversion = $programs |
