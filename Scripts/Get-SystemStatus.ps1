@@ -35,7 +35,7 @@ Version 1.0: Original published version
 .DESCRIPTION
  This script will gather information about the local machine and output results to a text file.
 
-.PARAMETER SaveLocatoin
+.PARAMETER SaveLocaton
  Specifies the save location for the output text file.
 
 .EXAMPLE
