@@ -269,6 +269,10 @@ function Get-SystemStatus {
                             "397312" {$defstatus = "Up to date" ;$rtstatus = "Enabled"}
                             "397328" {$defstatus = "Out of date" ;$rtstatus = "Enabled"}
                             "397584" {$defstatus = "Out of date" ;$rtstatus = "Enabled"}
+
+"397568" {$defstatus = "Up to date"; $rtstatus = "Enabled"}
+
+"393472" {$defstatus = "Up to date"; $rtstatus = "Disabled"}
                             default {$defstatus = "Unknown" ;$rtstatus = "Unknown"}
                         } #>
 
