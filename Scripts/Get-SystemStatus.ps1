@@ -278,7 +278,6 @@ function Get-SystemStatus {
 	                        [pscustomobject]@{
                                 Name    =   $d.FriendlyName
 		                        Size	=	$Drive
-		                        Brand	=	$drivebrand
 		                        Form	=	$d.Bustype
 		                        Type	=	$d.MediaType
 	                        }
@@ -381,7 +380,7 @@ function Get-SystemStatus {
         Add-Content -Path $Systeminfofile "**************************************************************"
         Add-Content -Path $Systeminfofile "DISK INFORMATION"
         Add-Content -Path $Systeminfofile "--------------------------------------------------------------"
-        Add-Content -Path $Systeminfofile $($DriveInfo | Out-String)
+        Add-Content -Path $Systeminfofile $($DriveInfo | Format-Table | Out-String)
         Add-Content -Path $Systeminfofile "----------"
         Add-Content -Path $Systeminfofile "**************************************************************"
         Add-Content -Path $Systeminfofile "GRAPHICS INFORMATION"
