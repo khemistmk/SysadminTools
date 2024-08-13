@@ -272,7 +272,7 @@ function Get-SystemStatus {
                             default {$defstatus = "Unknown" ;$rtstatus = "Unknown"}
                         } #>
 
-            $hx = ConvertTo-Hex $Av.ProductState
+            $hx = '0x{0:x}' -f $Av.ProductState
             $mid = $hx.Substring(3, 2)
             if ($mid -match "00|01") {
                 $rtstatus = "Disabled"
