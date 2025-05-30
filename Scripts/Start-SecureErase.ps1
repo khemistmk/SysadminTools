@@ -259,9 +259,11 @@ function Show-DiskSelectionGUI {
                         $sizeGB = $disk.SizeGB
                         $job = Start-Job -Name "WipeDisk$diskNumber" -ScriptBlock {
                             param ($DiskNumber, $SizeGB)
-                            # Re-import required assemblies and functions in job context
+
+                            # Define required assemblies and functions within job
                             Add-Type -AssemblyName System.Windows.Forms
                             Add-Type -AssemblyName System.Drawing
+
                             function Create-DiskpartScript {
                                 param (
                                     [string]$DiskNumber,
@@ -273,6 +275,7 @@ clean all
 "@
                                 $diskpartScript | Out-File -FilePath $ScriptPath -Encoding ASCII
                             }
+
                             function Estimate-PassTime {
                                 param (
                                     [double]$SizeGB
@@ -282,7 +285,147 @@ clean all
                                 $seconds = [math]::Round($sizeMB / $writeSpeedMBps)
                                 return $seconds
                             }
-                            & $using:([ScriptBlock]::Create((Get-Command Wipe-Disk).Definition)) -DiskNumber $DiskNumber -SizeGB $SizeGB
+
+                            function Wipe-Disk {
+                                param (
+                                    [string]$DiskNumber,
+                                    [double]$SizeGB
+                                )
+
+                                $totalPasses = 3
+                                $jobId = $DiskNumber
+                                $cancelFlagFile = "$env:TEMP\diskpart_cancel_$jobId.txt"
+
+                                # Create progress form
+                                $progressForm = New-Object System.Windows.Forms.Form
+                                $progressForm.Text = "Wiping Disk $DiskNumber"
+                                $progressForm.Size = New-Object System.Drawing.Size(400, 200)
+                                $progressForm.StartPosition = "CenterScreen"
+                                $progressForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::Sizable
+
+                                $progressBar = New-Object System.Windows.Forms.ProgressBar
+                                $progressBar.Name = "ProgressBar"
+                                $progressBar.Location = New-Object System.Drawing.Point(10, 50)
+                                $progressBar.Size = New-Object System.Drawing.Size(360, 20)
+                                $progressBar.Minimum = 0
+                                $progressBar.Maximum = 100
+
+                                $statusLabel = New-Object System.Windows.Forms.Label
+                                $statusLabel.Name = "StatusLabel"
+                                $statusLabel.Location = New-Object System.Drawing.Point(10, 20)
+                                $statusLabel.Size = New-Object System.Drawing.Size(360, 20)
+                                $statusLabel.Text = "Preparing to wipe..."
+
+                                $etaLabel = New-Object System.Windows.Forms.Label
+                                $etaLabel.Name = "ETALabel"
+                                $etaLabel.Location = New-Object System.Drawing.Point(10, 80)
+                                $etaLabel.Size = New-Object System.Drawing.Size(360, 20)
+                                $etaLabel.Text = "Estimating time..."
+
+                                $cancelButton = New-Object System.Windows.Forms.Button
+                                $cancelButton.Location = New-Object System.Drawing.Point(150, 120)
+                                $cancelButton.Size = New-Object System.Drawing.Size(75, 30)
+                                $cancelButton.Text = "Cancel"
+                                $cancelButton.Add_Click({
+                                    New-Item -Path $cancelFlagFile -ItemType File -Force | Out-Null
+                                    $progressForm.Close()
+                                })
+
+                                $progressForm.Controls.AddRange(@($progressBar, $statusLabel, $etaLabel, $cancelButton))
+
+                                # Show form in a separate runspace
+                                $runspace = [RunspaceFactory]::CreateRunspace()
+                                $runspace.Open()
+                                $runspace.SessionStateProxy.SetVariable("progressForm", $progressForm)
+                                $ps = [PowerShell]::Create()
+                                $ps.Runspace = $runspace
+                                $ps.AddScript({ $progressForm.ShowDialog() }) | Out-Null
+                                $ps.BeginInvoke() | Out-Null
+
+                                # Estimate total time
+                                $estimatedSecondsPerPass = Estimate-PassTime -SizeGB $SizeGB
+                                $eta = [TimeSpan]::FromSeconds($estimatedSecondsPerPass * $totalPasses)
+
+                                Write-Host "Wiping disk $DiskNumber ($SizeGB GB) with $totalPasses passes..."
+
+                                for ($pass = 1; $pass -le $totalPasses; $pass++) {
+                                    if (Test-Path $cancelFlagFile) {
+                                        Write-Host "Wipe operation cancelled for disk $DiskNumber."
+                                        $statusLabel.Text = "Wipe operation cancelled."
+                                        $etaLabel.Text = "Cancelled"
+                                        $progressBar.Value = 0
+                                        Start-Sleep -Seconds 2
+                                        $progressForm.Close()
+                                        Remove-Item $cancelFlagFile -Force -ErrorAction SilentlyContinue
+                                        $runspace.Close()
+                                        $ps.Dispose()
+                                        return $false
+                                    }
+
+                                    $statusLabel.Text = "Pass $pass of $totalPasses : Writing zeros to disk $DiskNumber"
+                                    $progressBar.Value = (($pass - 1) * 100) / $totalPasses
+                                    $etaLabel.Text = "Estimated time remaining: $eta"
+                                    [System.Windows.Forms.Application]::DoEvents()
+
+                                    # Create and run diskpart script
+                                    $diskpartScriptPath = "$env:TEMP\diskpart_script_$DiskNumber.txt"
+                                    Create-DiskpartScript -DiskNumber $DiskNumber -ScriptPath $diskpartScriptPath
+
+                                    try {
+                                        $startTime = Get-Date
+                                        $process = Start-Process diskpart -ArgumentList "/s $diskpartScriptPath" -NoNewWindow -PassThru -RedirectStandardOutput "$env:TEMP\diskpart_output_$DiskNumber.txt"
+                                        while (-not $process.HasExited) {
+                                            if (Test-Path $cancelFlagFile) {
+                                                $process.Kill()
+                                                Write-Host "Wipe operation cancelled for disk $DiskNumber."
+                                                $statusLabel.Text = "Wipe operation cancelled."
+                                                $etaLabel.Text = "Cancelled"
+                                                $progressBar.Value = 0
+                                                Start-Sleep -Seconds 2
+                                                $progressForm.Close()
+                                                Remove-Item $cancelFlagFile -Force -ErrorAction SilentlyContinue
+                                                Remove-Item $diskpartScriptPath -Force -ErrorAction SilentlyContinue
+                                                Remove-Item "$env:TEMP\diskpart_output_$DiskNumber.txt" -Force -ErrorAction SilentlyContinue
+                                                $runspace.Close()
+                                                $ps.Dispose()
+                                                return $false
+                                            }
+                                            [System.Windows.Forms.Application]::DoEvents()
+                                            Start-Sleep -Milliseconds 100
+                                        }
+                                        $diskpartOutput = Get-Content "$env:TEMP\diskpart_output_$DiskNumber.txt" -ErrorAction SilentlyContinue
+                                        Write-Host $diskpartOutput
+                                        Remove-Item "$env:TEMP\diskpart_output_$DiskNumber.txt" -Force -ErrorAction SilentlyContinue
+                                        $elapsed = (Get-Date) - $startTime
+                                        $eta = [TimeSpan]::FromSeconds($elapsed.TotalSeconds * ($totalPasses - $pass))
+                                    } catch {
+                                        Write-Warning "Error during zeroing pass $pass on disk $DiskNumber : $_"
+                                        $statusLabel.Text = "Error during wipe."
+                                        $etaLabel.Text = "Failed"
+                                        $progressForm.Close()
+                                        Remove-Item $diskpartScriptPath -Force -ErrorAction SilentlyContinue
+                                        $runspace.Close()
+                                        $ps.Dispose()
+                                        return $false
+                                    }
+
+                                    Remove-Item $diskpartScriptPath -Force -ErrorAction SilentlyContinue
+                                    $progressBar.Value = ($pass * 100) / $totalPasses
+                                    [System.Windows.Forms.Application]::DoEvents()
+                                }
+
+                                $statusLabel.Text = "Disk $DiskNumber wiped successfully."
+                                $etaLabel.Text = "Completed"
+                                $cancelButton.Enabled = $false
+                                Start-Sleep -Seconds 2
+                                $progressForm.Close()
+                                $runspace.Close()
+                                $ps.Dispose()
+                                return $true
+                            }
+
+                            # Call Wipe-Disk within the job
+                            Wipe-Disk -DiskNumber $DiskNumber -SizeGB $SizeGB
                         } -ArgumentList $diskNumber, $sizeGB
                         $jobs += $job
                     }
