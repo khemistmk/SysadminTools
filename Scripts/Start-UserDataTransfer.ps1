@@ -221,7 +221,8 @@ $roboCopyParams = @(
     "/MIR",      # Mirror source to destination
     "/MT:32",    # Use 32 threads for faster copying
     "/XD",       # Exclude directories (for user folder only)
-    "Appdata"
+    "Application Data",
+    "Appdata",
     "*onedrive*",
     "*dropbox*",
     "*icloud*",
