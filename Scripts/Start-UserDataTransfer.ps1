@@ -1,12 +1,13 @@
 <#
 .SYNOPSIS
-    Script to export or import user data, browser profiles, and system settings to/from a USB storage device.
+    Script to export or import user data, browser profiles, and system settings to/from a USB storage device with progress tracking.
 
 .DESCRIPTION
     Exports or imports user data, browser profiles (Chrome, Edge, Firefox), Outlook signatures,
     Quick Access pins, Taskbar settings, File Explorer settings, and mapped network drives
     to a USB device with a folder structure of DriveLetter:\CompanyName\UserName.
     Excludes cloud service folders (*onedrive*, *dropbox*, *icloud*).
+    Includes a progress bar and estimated time to completion for data transfers.
     Designed for upgrading to a new computer with minimal disruption.
 
 .PARAMETER Action
@@ -38,6 +39,76 @@ function Get-USBDrive {
 function Test-ValidPath {
     param($Path)
     return (Test-Path $Path -PathType Container)
+}
+
+# Function to calculate directory size (excluding specified folders)
+function Get-DirectorySize {
+    param(
+        [string]$Path,
+        [string[]]$Exclude = @()
+    )
+    if (-not (Test-ValidPath $Path)) { return 0 }
+    $files = Get-ChildItem -Path $Path -Recurse -File -ErrorAction SilentlyContinue | 
+        Where-Object { 
+            $pathLower = $_.FullName.ToLower()
+            -not ($Exclude | Where-Object { $pathLower -like $_ })
+        }
+    return ($files | Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
+}
+
+# Function to run robocopy with progress bar and estimated time
+function Invoke-RobocopyWithProgress {
+    param(
+        [string]$Source,
+        [string]$Destination,
+        [string]$Description,
+        [array]$RobocopyParams
+    )
+    if (-not (Test-ValidPath $Source)) {
+        Write-Warning "$Description source not found, skipping..."
+        return
+    }
+
+    # Calculate total size to copy
+    $totalSize = Get-DirectorySize -Path $Source -Exclude @("*onedrive*","*dropbox*","*icloud*")
+    if ($totalSize -eq 0) {
+        Write-Warning "$Description is empty, skipping..."
+        return
+    }
+
+    # Assume average USB 3.0 transfer speed (50 MB/s, adjustable)
+    $transferSpeedMBps = 50
+    $estimatedSeconds = [math]::Ceiling($totalSize / 1MB / $transferSpeedMBps)
+    $startTime = Get-Date
+
+    # Start robocopy as a job to monitor progress
+    $job = Start-Job -ScriptBlock {
+        param($src, $dst, $params)
+        robocopy $src $dst *.* @params
+    } -ArgumentList $Source, $Destination, $RobocopyParams
+
+    # Monitor destination size for progress
+    $copiedSize = 0
+    while ($job.State -eq "Running") {
+        $copiedSize = Get-DirectorySize -Path $Destination
+        $percentComplete = [math]::Min([math]::Round(($copiedSize / $totalSize) * 100), 100)
+        $elapsedSeconds = ((Get-Date) - $startTime).TotalSeconds
+        $remainingSeconds = [math]::Max(0, $estimatedSeconds - $elapsedSeconds)
+        $timeRemaining = [timespan]::FromSeconds([math]::Round($remainingSeconds))
+
+        Write-Progress -Activity "Copying $Description" `
+                      -Status "Progress: $percentComplete% - Estimated time remaining: $timeRemaining" `
+                      -PercentComplete $percentComplete
+
+        Start-Sleep -Milliseconds 1000
+    }
+
+    # Wait for job to complete and clean up
+    Wait-Job $job | Out-Null
+    $result = Receive-Job $job
+    Remove-Job $job
+
+    Write-Progress -Activity "Copying $Description" -Completed
 }
 
 # Function to export Quick Access pins
@@ -139,48 +210,24 @@ try {
         New-Item -Path $targetBasePath, $settingsTarget -ItemType Directory -Force | Out-Null
 
         # Export user folder
-        if (Test-ValidPath $userFolder) {
-            Write-Host "Exporting user data from $userFolder..."
-            robocopy $userFolder $targetBasePath *.* @roboCopyParams
-        } else {
-            Write-Warning "User folder $userFolder not found, skipping..."
-        }
+        Invoke-RobocopyWithProgress -Source $userFolder -Destination $targetBasePath `
+                                   -Description "User Data" -RobocopyParams $roboCopyParams
 
         # Export Chrome data
-        if (Test-ValidPath $chromeSource) {
-            Write-Host "Exporting Chrome data from $chromeSource..."
-            New-Item -Path $chromeTarget -ItemType Directory -Force | Out-Null
-            robocopy $chromeSource $chromeTarget *.* @roboCopyParams
-        } else {
-            Write-Warning "Chrome folder $chromeSource not found, skipping..."
-        }
+        Invoke-RobocopyWithProgress -Source $chromeSource -Destination $chromeTarget `
+                                   -Description "Chrome Data" -RobocopyParams $roboCopyParams
 
         # Export Edge data
-        if (Test-ValidPath $edgeSource) {
-            Write-Host "Exporting Edge data from $edgeSource..."
-            New-Item -Path $edgeTarget -ItemType Directory -Force | Out-Null
-            robocopy $edgeSource $edgeTarget *.* @roboCopyParams
-        } else {
-            Write-Warning "Edge folder $edgeSource not found, skipping..."
-        }
+        Invoke-RobocopyWithProgress -Source $edgeSource -Destination $edgeTarget `
+                                   -Description "Edge Data" -RobocopyParams $roboCopyParams
 
         # Export Firefox data
-        if (Test-ValidPath $firefoxSource) {
-            Write-Host "Exporting Firefox data from $firefoxSource..."
-            New-Item -Path $firefoxTarget -ItemType Directory -Force | Out-Null
-            robocopy $firefoxSource $firefoxTarget *.* @roboCopyParams
-        } else {
-            Write-Warning "Firefox folder $firefoxSource not found, skipping..."
-        }
+        Invoke-RobocopyWithProgress -Source $firefoxSource -Destination $firefoxTarget `
+                                   -Description "Firefox Data" -RobocopyParams $roboCopyParams
 
         # Export Outlook signatures
-        if (Test-ValidPath $signaturesSource) {
-            Write-Host "Exporting Outlook signatures from $signaturesSource..."
-            New-Item -Path $signaturesTarget -ItemType Directory -Force | Out-Null
-            robocopy $signaturesSource $signaturesTarget *.* @roboCopyParams
-        } else {
-            Write-Warning "Signatures folder $signaturesSource not found, skipping..."
-        }
+        Invoke-RobocopyWithProgress -Source $signaturesSource -Destination $signaturesTarget `
+                                   -Description "Outlook Signatures" -RobocopyParams $roboCopyParams
 
         # Export Quick Access pins
         Write-Host "Exporting Quick Access pins..."
@@ -210,14 +257,15 @@ try {
         }
 
         # Import user folder
-        Write-Host "Importing user data to $userFolder..."
-        robocopy $targetBasePath $userFolder *.* @roboCopyParams
+        Invoke-RobocopyWithProgress -Source $targetBasePath -Destination $userFolder `
+                                   -Description "User Data" -RobocopyParams $roboCopyParams
 
         # Import Chrome data
         if (Test-ValidPath $chromeTarget) {
             Write-Host "Importing Chrome data to $chromeSource..."
             New-Item -Path $chromeSource -ItemType Directory -Force | Out-Null
-            robocopy $chromeTarget $chromeSource *.* @roboCopyParams
+            Invoke-RobocopyWithProgress -Source $chromeTarget -Destination $chromeSource `
+                                       -Description "Chrome Data" -RobocopyParams $roboCopyParams
         } else {
             Write-Warning "Chrome folder $chromeTarget not found on USB, skipping..."
         }
@@ -226,7 +274,8 @@ try {
         if (Test-ValidPath $edgeTarget) {
             Write-Host "Importing Edge data to $edgeSource..."
             New-Item -Path $edgeSource -ItemType Directory -Force | Out-Null
-            robocopy $edgeTarget $edgeSource *.* @roboCopyParams
+            Invoke-RobocopyWithProgress -Source $edgeTarget -Destination $edgeSource `
+                                       -Description "Edge Data" -RobocopyParams $roboCopyParams
         } else {
             Write-Warning "Edge folder $edgeTarget not found on USB, skipping..."
         }
@@ -235,7 +284,8 @@ try {
         if (Test-ValidPath $firefoxTarget) {
             Write-Host "Importing Firefox data to $firefoxSource..."
             New-Item -Path $firefoxSource -ItemType Directory -Force | Out-Null
-            robocopy $firefoxTarget $firefoxSource *.* @roboCopyParams
+            Invoke-RobocopyWithProgress -Source $firefoxTarget -Destination $firefoxSource `
+                                       -Description "Firefox Data" -RobocopyParams $roboCopyParams
         } else {
             Write-Warning "Firefox folder $firefoxTarget not found on USB, skipping..."
         }
@@ -244,7 +294,8 @@ try {
         if (Test-ValidPath $signaturesTarget) {
             Write-Host "Importing Outlook signatures to $signaturesSource..."
             New-Item -Path $signaturesSource -ItemType Directory -Force | Out-Null
-            robocopy $signaturesTarget $signaturesSource *.* @roboCopyParams
+            Invoke-RobocopyWithProgress -Source $signaturesTarget -Destination $signaturesSource `
+                                       -Description "Outlook Signatures" -RobocopyParams $roboCopyParams
         } else {
             Write-Warning "Signatures folder $signaturesTarget not found on USB, skipping..."
         }
