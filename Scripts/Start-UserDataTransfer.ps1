@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-    Script to export or import user data, browser profiles, and system settings to/from a USB storage device with progress tracking.
+    Script to export or import user data, browser profiles, and system settings to/from a USB storage device with progress tracking and cancellation support.
 
 .DESCRIPTION
     Exports or imports user data, browser profiles (Chrome, Edge, Firefox), Outlook signatures,
     Quick Access pins, Taskbar settings, File Explorer settings, and mapped network drives
     to a USB device with a folder structure of DriveLetter:\CompanyName\UserName.
     Excludes cloud service folders (*onedrive*, *dropbox*, *icloud*).
-    Includes a progress bar and estimated time to completion for data transfers.
+    Includes a progress bar, estimated time to completion, and cancellation support (press 'C' to cancel).
     Designed for upgrading to a new computer with minimal disruption.
 
 .PARAMETER Action
@@ -56,7 +56,23 @@ function Get-DirectorySize {
     return ($files | Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
 }
 
-# Function to run robocopy with progress bar and estimated time
+# Function to check for cancellation keypress
+function Check-Cancellation {
+    if ([Console]::KeyAvailable) {
+        $key = [Console]::ReadKey($true)
+        if ($key.KeyChar -eq 'c' -or $key.Key -eq 'C' -or $key.Modifiers -eq 'Control') {
+            Write-Host "Cancellation requested. Press 'Y' to confirm, or any other key to continue..."
+            $confirm = [Console]::ReadKey($true).KeyChar
+            if ($confirm -eq 'y' -or $confirm -eq 'Y') {
+                Write-Host "Cancelling operation..."
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+# Function to run robocopy with progress bar, estimated time, and cancellation
 function Invoke-RobocopyWithProgress {
     param(
         [string]$Source,
@@ -76,44 +92,57 @@ function Invoke-RobocopyWithProgress {
         return
     }
 
+    # Ensure destination exists
+    New-Item -Path $Destination -ItemType Directory -Force | Out-Null
+
     # Assume average USB 3.0 transfer speed (50 MB/s, adjustable)
     $transferSpeedMBps = 50
     $estimatedSeconds = [math]::Ceiling($totalSize / 1MB / $transferSpeedMBps)
     $startTime = Get-Date
 
-    # Start robocopy as a job to monitor progress
-    $job = Start-Job -ScriptBlock {
-        param($src, $dst, $params)
-        robocopy $src $dst *.* @params
-    } -ArgumentList $Source, $Destination, $RobocopyParams
+    # Prepare robocopy arguments
+    $robocopyArgs = @($Source, $Destination, "*.*") + $RobocopyParams
 
-    # Monitor destination size for progress
+    # Start robocopy process
+    $process = Start-Process -FilePath "robocopy" -ArgumentList $robocopyArgs -NoNewWindow -PassThru
+
+    # Monitor progress and cancellation
     $copiedSize = 0
-    while ($job.State -eq "Running") {
-        $copiedSize = Get-DirectorySize -Path $Destination
-        $percentComplete = [math]::Min([math]::Round(($copiedSize / $totalSize) * 100), 100)
-        $elapsedSeconds = ((Get-Date) - $startTime).TotalSeconds
-        $remainingSeconds = [math]::Max(0, $estimatedSeconds - $elapsedSeconds)
-        $timeRemaining = [timespan]::FromSeconds([math]::Round($remainingSeconds))
+    try {
+        while (-not $process.HasExited) {
+            if (Check-Cancellation) {
+                # Terminate robocopy process
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                Write-Warning "$Description copy cancelled."
+                return
+            }
 
-        Write-Progress -Activity "Copying $Description" `
-                      -Status "Progress: $percentComplete% - Estimated time remaining: $timeRemaining" `
-                      -PercentComplete $percentComplete
+            $copiedSize = Get-DirectorySize -Path $Destination
+            $percentComplete = [math]::Min([math]::Round(($copiedSize / $totalSize) * 100), 100)
+            $elapsedSeconds = ((Get-Date) - $startTime).TotalSeconds
+            $remainingSeconds = [math]::Max(0, $estimatedSeconds - $elapsedSeconds)
+            $timeRemaining = [timespan]::FromSeconds([math]::Round($remainingSeconds))
 
-        Start-Sleep -Milliseconds 1000
+            Write-Progress -Activity "Copying $Description" `
+                          -Status "Progress: $percentComplete% - Estimated time remaining: $timeRemaining (Press 'C' to cancel)" `
+                          -PercentComplete $percentComplete
+
+            Start-Sleep -Milliseconds 1000
+        }
     }
-
-    # Wait for job to complete and clean up
-    Wait-Job $job | Out-Null
-    $result = Receive-Job $job
-    Remove-Job $job
-
-    Write-Progress -Activity "Copying $Description" -Completed
+    finally {
+        # Ensure process is terminated and progress bar is cleared
+        if (-not $process.HasExited) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        }
+        Write-Progress -Activity "Copying $Description" -Completed
+    }
 }
 
 # Function to export Quick Access pins
 function Export-QuickAccess {
     param($TargetPath)
+    if (Check-Cancellation) { throw "Operation cancelled." }
     $quickAccess = New-Object -ComObject Shell.Application
     $pins = $quickAccess.NameSpace("shell:::{679F85CB-0220-4080-B29B-5540CC05AAB6}").Items() | 
         Select-Object Name, Path
@@ -123,6 +152,7 @@ function Export-QuickAccess {
 # Function to import Quick Access pins
 function Import-QuickAccess {
     param($SourcePath)
+    if (Check-Cancellation) { throw "Operation cancelled." }
     if (Test-Path $SourcePath) {
         $pins = Get-Content $SourcePath | ConvertFrom-Json
         $quickAccess = New-Object -ComObject Shell.Application
@@ -138,6 +168,7 @@ function Import-QuickAccess {
 # Function to export mapped network drives
 function Export-MappedDrives {
     param($TargetPath)
+    if (Check-Cancellation) { throw "Operation cancelled." }
     $drives = Get-ItemProperty -Path "HKCU:\Network\*" | 
         Select-Object RemotePath, UserName, ProviderName, ConnectionState
     $drives | ConvertTo-Json | Out-File -FilePath $TargetPath -Force
@@ -146,6 +177,7 @@ function Export-MappedDrives {
 # Function to import mapped network drives
 function Import-MappedDrives {
     param($SourcePath)
+    if (Check-Cancellation) { throw "Operation cancelled." }
     if (Test-Path $SourcePath) {
         $drives = Get-Content $SourcePath | ConvertFrom-Json
         foreach ($drive in $drives) {
@@ -189,6 +221,7 @@ $roboCopyParams = @(
     "/MIR",      # Mirror source to destination
     "/MT:32",    # Use 32 threads for faster copying
     "/XD",       # Exclude directories (for user folder only)
+    "Appdata"
     "*onedrive*",
     "*dropbox*",
     "*icloud*",
@@ -204,7 +237,7 @@ $roboCopyParams = @(
 
 try {
     if ($Action -eq "Export") {
-        Write-Host "Exporting data to $targetBasePath..."
+        Write-Host "Exporting data to $targetBasePath... (Press 'C' to cancel)"
 
         # Create target directories
         New-Item -Path $targetBasePath, $settingsTarget -ItemType Directory -Force | Out-Null
@@ -248,7 +281,7 @@ try {
         Write-Host "Export completed. Check transfer.log for details."
     }
     elseif ($Action -eq "Import") {
-        Write-Host "Importing data from $targetBasePath..."
+        Write-Host "Importing data from $targetBasePath... (Press 'C' to cancel)"
 
         # Validate base target path
         if (-not (Test-ValidPath $targetBasePath)) {
