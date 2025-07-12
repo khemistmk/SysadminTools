@@ -118,7 +118,7 @@ function Install-OSDCloudWinPE {
 
     # Create OSDCloud template and workspace
     try {
-        New-OSDCloudTemplate -Language en-us -SetInputLocale en-us -Verbose
+        New-OSDCloudTemplate
         New-OSDCloudWorkspace -WorkspacePath $WorkspacePath -Verbose
         Set-OSDCloudWorkspace -WorkspacePath $WorkspacePath -Verbose
     }
