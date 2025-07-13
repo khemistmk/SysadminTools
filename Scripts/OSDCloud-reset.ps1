@@ -96,6 +96,16 @@ function New-RecoveryPartition {
         Set-Partition -DriveLetter $driveLetter -GptType "{de94bba4-06d1-4d40-a16a-bfd50179d6ac}"
         Write-Host "Set partition type to Recovery."
 
+        # Wait briefly to ensure the partition is ready
+        Start-Sleep -Seconds 2
+
+        # Verify the partition is accessible
+        $volume = Get-Volume -DriveLetter $driveLetter -ErrorAction SilentlyContinue
+        if (-not $volume -or $volume.FileSystem -ne 'NTFS') {
+            Write-Error "Recovery partition (Drive $driveLetter) is not accessible or not NTFS."
+            exit 1
+        }
+
         return $driveLetter
     }
     catch {
@@ -113,6 +123,12 @@ function Install-PrebuiltWinPE {
 
     Write-Host "Downloading prebuilt OSDCloud WinPE boot.wim to $DriveLetter..."
 
+    # Verify the drive is accessible
+    if (-not (Test-Path "${DriveLetter}:\")) {
+        Write-Error "Recovery partition drive $DriveLetter is not accessible."
+        exit 1
+    }
+
     # Create recovery directory
     try {
         $recoveryPath = "${DriveLetter}:\Recovery\WindowsRE"
@@ -120,18 +136,35 @@ function Install-PrebuiltWinPE {
         Write-Host "Created recovery directory at $recoveryPath."
     }
     catch {
-        Write-Error "Failed to create recovery directory: $_"
+        Write-Error "Failed to create recovery directory at $recoveryPath : $_"
         exit 1
     }
 
-    # Download boot.wim
+    # Download boot.wim with retry logic
     try {
         $winPEPath = "$recoveryPath\winre.wim"
-        Invoke-WebRequest -Uri $WinPEUrl -OutFile $winPEPath -ErrorAction Stop
-        Write-Host "Downloaded prebuilt boot.wim to $winPEPath."
+        $maxRetries = 3
+        $retryCount = 0
+        $success = $false
+
+        while (-not $success -and $retryCount -lt $maxRetries) {
+            try {
+                Invoke-WebRequest -Uri $WinPEUrl -OutFile $winPEPath -ErrorAction Stop
+                $success = $true
+                Write-Host "Downloaded prebuilt boot.wim to $winPEPath."
+            }
+            catch {
+                $retryCount++
+                Write-Warning "Download attempt $retryCount failed: $_"
+                if ($retryCount -eq $maxRetries) {
+                    throw "Failed to download boot.wim after $maxRetries attempts: $_"
+                }
+                Start-Sleep -Seconds 2
+            }
+        }
     }
     catch {
-        Write-Error "Failed to download boot.wim from $WinPEUrl."
+        Write-Error "Failed to download boot.wim from $WinPEUrl: $_"
         exit 1
     }
 
