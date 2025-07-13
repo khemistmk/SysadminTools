@@ -3,17 +3,18 @@
 
 <#
 .SYNOPSIS
-    Shrinks the OS partition, creates a recovery partition, installs OSDCloud WinPE, and boots to it for OS reinstallation.
+    Shrinks the OS partition, creates a recovery partition, installs OSDCloud WinPE with embedded Start-OSDCloud parameters,
+    and reboots into the recovery partition for OS reinstallation.
 
 .DESCRIPTION
-    This script shrinks the OS partition to make space, creates a recovery partition on the primary disk,
-    downloads and configures OSDCloud WinPE, sets up the boot configuration, and restarts the machine
-    to boot into WinPE for OS reinstallation. The script is designed to be run remotely via irm and iex.
+    This script shrinks the OS partition to create space, sets up a recovery partition on the primary disk,
+    configures OSDCloud WinPE with embedded Start-OSDCloud parameters, updates boot settings, and reboots
+    into the recovery partition to automatically reinstall Windows using OSDCloud. Designed to be run remotely via irm and iex.
 
 .NOTES
     Author: Grok, with inspiration from OSDCloud by David Segura
     Date: July 12, 2025
-    Requirements: Internet access, administrative privileges, Windows 10/11, UEFI firmware
+    Requirements: Internet access, administrative privileges, Windows 10/11, UEFI firmware, Windows ADK with WinPE Add-on
     Warning: Modifies disk partitions and may cause data loss. Test in a VM first.
 #>
 
@@ -26,6 +27,16 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     exit 1
 }
 
+# Function to check for Windows ADK and WinPE Add-on
+function Test-WinADK {
+    $adkPath = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment"
+    if (-not (Test-Path $adkPath)) {
+        Write-Error "Windows ADK with WinPE Add-on is not installed. Please install it from https://docs.microsoft.com/en-us/windows-hardware/get-started/adk-install."
+        exit 1
+    }
+    Write-Host "Windows ADK with WinPE Add-on detected."
+}
+
 # Function to shrink the OS partition and create a recovery partition
 function New-RecoveryPartition {
     param (
@@ -35,14 +46,18 @@ function New-RecoveryPartition {
 
     Write-Host "Shrinking OS partition and creating recovery partition on Disk $DiskNumber..."
 
-    # Get the target disk
+    # Get the target disk and verify it's GPT
     $disk = Get-Disk -Number $DiskNumber
     if (-not $disk) {
         Write-Error "Disk $DiskNumber not found."
         exit 1
     }
+    if ($disk.PartitionStyle -ne 'GPT') {
+        Write-Error "Disk $DiskNumber is not GPT. This script requires a GPT disk for UEFI compatibility."
+        exit 1
+    }
 
-    # Identify the OS partition (typically the largest NTFS partition with Windows)
+    # Identify the OS partition (largest NTFS partition with Windows folder)
     $osPartition = Get-Partition -DiskNumber $DiskNumber | Where-Object {
         $_.Type -eq 'Basic' -and $_.DriveLetter -and (Test-Path "$($_.DriveLetter):\Windows")
     } | Sort-Object Size -Descending | Select-Object -First 1
@@ -56,14 +71,13 @@ function New-RecoveryPartition {
     Write-Host "Identified OS partition: Drive $driveLetterOS, Size: $($osPartition.Size / 1MB) MB"
 
     # Check if the OS partition can be shrunk
-    $volume = Get-Volume -DriveLetter $driveLetterOS
     $sizeInfo = Get-PartitionSupportedSize -DriveLetter $driveLetterOS
     $minSizeMB = [math]::Ceiling($sizeInfo.SizeMin / 1MB)
     $currentSizeMB = [math]::Ceiling($osPartition.Size / 1MB)
     $availableShrinkMB = $currentSizeMB - $minSizeMB
 
     if ($availableShrinkMB -lt $PartitionSizeMB) {
-        Write-Error "Insufficient shrinkable space on OS partition. Available: $availableShrinkMB MB, Required: $PartitionSizeMB MB."
+        Write-Error "Insufficient shrinkable space on OS partition. Available: $availableShrinkMB MB, Required: $PartitionSizeMB MB. Try running 'defrag $driveLetterOS /X' to consolidate free space."
         exit 1
     }
 
@@ -100,7 +114,7 @@ function New-RecoveryPartition {
     }
 }
 
-# Function to download and install OSDCloud WinPE
+# Function to download and install OSDCloud WinPE with embedded Start-OSDCloud parameters
 function Install-OSDCloudWinPE {
     param (
         [string]$DriveLetter,
@@ -118,7 +132,7 @@ function Install-OSDCloudWinPE {
 
     # Create OSDCloud template and workspace
     try {
-        New-OSDCloudTemplate
+        New-OSDCloudTemplate -Language en-us -SetInputLocale en-us -Verbose
         New-OSDCloudWorkspace -WorkspacePath $WorkspacePath -Verbose
         Set-OSDCloudWorkspace -WorkspacePath $WorkspacePath -Verbose
     }
@@ -127,10 +141,11 @@ function Install-OSDCloudWinPE {
         exit 1
     }
 
-    # Customize WinPE with drivers and automation script
-    $webPSScript = "https://raw.githubusercontent.com/OSDeploy/OSDCloud/main/Demo-CustomOSDCloud.ps1"
+    # Customize WinPE with drivers and embedded Start-OSDCloud parameters
     try {
-        Edit-OSDCloudWinPE -WorkspacePath $WorkspacePath -CloudDriver Dell,HP,IntelNet,LenovoDock,Nutanix,USB,VMware,WiFi -WebPSScript $webPSScript -Verbose
+        Edit-OSDCloudWinPE -WorkspacePath $WorkspacePath -CloudDriver Dell,HP,IntelNet,LenovoDock,Nutanix,USB,VMware,WiFi `
+            -StartOSDCloud "-OSName 'Windows 11 24H2 x64' -OSEdition Pro -OSActivation Retail -OSLanguage en-us -RecoveryPartition" -Verbose
+        Write-Host "Customized WinPE with embedded Start-OSDCloud parameters."
     }
     catch {
         Write-Error "Failed to customize OSDCloud WinPE: $_"
@@ -175,66 +190,55 @@ function Set-WinREBoot {
 
     try {
         # Disable WinRE temporarily
-        reagentc /disable
+        reagentc /disable | Out-Null
+        Write-Host "Disabled existing WinRE configuration."
 
         # Update ReAgent.xml with new WinRE path
         $reagentXml = @"
 <WindowsRE version="2.0">
   <WinreBCD id="{00000000-0000-0000-0000-000000000000}"/>
-  <WinreLocation path="\Recovery\WindowsRE" id="0" offset="0" guid="{00000000-0000-0000-0000-000000000000}"/>
+  <WinreLocation path="\Recovery\WindowsRE" id="$partitionIndex" offset="0" guid="{00000000-0000-0000-0000-000000000000}"/>
   <ImageLocation path="\Recovery\WindowsRE" id="$diskNumber" offset="0" guid="{00000000-0000-0000-0000-000000000000}"/>
   <InstallState state="1"/>
   <IsServer value="0"/>
   <IsWimBoot value="0"/>
-  <CustomImage value="0"/>
+  <CustomImage value="1"/>
 </WindowsRE>
 "@
         Set-Content -Path $reagentXmlPath -Value $reagentXml -Force
         Write-Host "Updated ReAgent.xml with new WinRE path."
 
-        # Enable WinRE
-        reagentc /enable
-        reagentc /setreimage /path "$RecoveryPath" /target C:\Windows
+        # Enable WinRE with the new path
+        reagentc /setreimage /path "$RecoveryPath" /target C:\Windows | Out-Null
+        reagentc /enable | Out-Null
+        Write-Host "Enabled WinRE with new recovery partition."
 
-        # Set boot order to boot from recovery partition
-        $bcdStore = bcdedit /store C:\boot\bcd
+        # Create a new BCD entry for the recovery environment
         $bcdEntry = bcdedit /create /d "Windows Recovery Environment" /application osloader
         $guid = ($bcdEntry | Select-String "{.+}").Matches.Value
-        bcdedit /set $guid osdevice partition=${DriveLetter}:
-        bcdedit /set $guid device partition=${DriveLetter}:
-        bcdedit /set $guid path \Recovery\WindowsRE\winre.wim
-        bcdedit /set $guid recoveryenabled Yes
-        bcdedit /set $guid recoverysequence $guid
-        bcdedit /displayorder $guid /addfirst
+        if (-not $guid) {
+            Write-Error "Failed to create BCD entry for WinRE."
+            exit 1
+        }
 
-        Write-Host "Configured BCD to boot from recovery partition."
+        # Configure BCD entry
+        bcdedit /set $guid device partition=${DriveLetter}: | Out-Null
+        bcdedit /set $guid osdevice partition=${DriveLetter}: | Out-Null
+        bcdedit /set $guid path \Recovery\WindowsRE\winre.wim | Out-Null
+        bcdedit /set $guid recoveryenabled Yes | Out-Null
+        bcdedit /set $guid recoverysequence $guid | Out-Null
+        bcdedit /displayorder $guid /addfirst | Out-Null
+        Write-Host "Configured BCD to boot from recovery partition (GUID: $guid)."
+
+        # Verify BCD configuration
+        $bcdCheck = bcdedit /enum all | Select-String $guid
+        if (-not $bcdCheck) {
+            Write-Error "BCD configuration verification failed."
+            exit 1
+        }
     }
     catch {
         Write-Error "Failed to configure WinRE or boot settings: $_"
-        exit 1
-    }
-}
-
-# Function to initiate OS reinstallation with OSDCloud
-function Start-OSDCloudReinstall {
-    Write-Host "Preparing to boot into WinPE for OS reinstallation..."
-
-    # Define OSDCloud parameters for reinstallation
-    $osdParams = @{
-        OSName = 'Windows 11 23H2 x64'
-        OSEdition = 'Pro'
-        OSActivation = 'Retail'
-        OSLanguage = 'en-us'
-        Restart = $true
-        RecoveryPartition = $true
-    }
-
-    # Start OSDCloud
-    try {
-        Start-OSDCloud @osdParams -Verbose
-    }
-    catch {
-        Write-Error "Failed to start OSDCloud: $_"
         exit 1
     }
 }
@@ -243,19 +247,22 @@ function Start-OSDCloudReinstall {
 try {
     Write-Host "Starting recovery partition creation and OSDCloud setup..."
 
-    # Step 1: Shrink OS partition and create recovery partition
+    # Step 1: Check for Windows ADK
+    Test-WinADK
+
+    # Step 2: Shrink OS partition and create recovery partition
     $driveLetter = New-RecoveryPartition
 
-    # Step 2: Install OSDCloud WinPE to recovery partition
+    # Step 3: Install OSDCloud WinPE to recovery partition with embedded Start-OSDCloud
     $recoveryPath = Install-OSDCloudWinPE -DriveLetter $driveLetter
 
-    # Step 3: Configure WinRE and boot settings
+    # Step 4: Configure WinRE and boot settings
     Set-WinREBoot -RecoveryPath $recoveryPath -DriveLetter $driveLetter
 
-    # Step 4: Restart to boot into WinPE and start OSDCloud
-    Write-Host "Restarting to boot into WinPE for OS reinstallation..."
+    # Step 5: Signal reboot into recovery partition
+    Write-Host "Rebooting into recovery partition to start OSDCloud OS reinstallation..."
     Start-Sleep -Seconds 5
-    wpeutil reboot
+    Restart-Computer -Force
 }
 catch {
     Write-Error "Script execution failed: $_"
