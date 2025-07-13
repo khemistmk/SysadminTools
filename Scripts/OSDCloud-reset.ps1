@@ -3,18 +3,18 @@
 
 <#
 .SYNOPSIS
-    Shrinks the OS partition, creates a recovery partition, installs OSDCloud WinPE with embedded Start-OSDCloud parameters,
-    and reboots into the recovery partition for OS reinstallation.
+    Shrinks the OS partition, creates a recovery partition, downloads a prebuilt OSDCloud WinPE boot.wim,
+    configures the boot settings, and reboots into the recovery partition for OS reinstallation.
 
 .DESCRIPTION
-    This script shrinks the OS partition to create space, sets up a recovery partition on the primary disk,
-    configures OSDCloud WinPE with embedded Start-OSDCloud parameters, updates boot settings, and reboots
-    into the recovery partition to automatically reinstall Windows using OSDCloud. Designed to be run remotely via irm and iex.
+    This script shrinks the OS partition to create a 2GB recovery partition, downloads a prebuilt OSDCloud
+    WinPE boot.wim from a specified URL, places it in the recovery partition, configures WinRE and BCD,
+    and reboots into the recovery partition to start OS reinstallation. Designed to be run remotely via irm and iex.
 
 .NOTES
-    Author: Grok, with inspiration from OSDCloud by David Segura
+    Author: Grok
     Date: July 12, 2025
-    Requirements: Internet access, administrative privileges, Windows 10/11, UEFI firmware, Windows ADK with WinPE Add-on
+    Requirements: Internet access, administrative privileges, Windows 10/11, UEFI firmware, GPT disk
     Warning: Modifies disk partitions and may cause data loss. Test in a VM first.
 #>
 
@@ -25,16 +25,6 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Error "This script requires administrative privileges. Please run as Administrator."
     exit 1
-}
-
-# Function to check for Windows ADK and WinPE Add-on
-function Test-WinADK {
-    $adkPath = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment"
-    if (-not (Test-Path $adkPath)) {
-        Write-Error "Windows ADK with WinPE Add-on is not installed. Please install it from https://docs.microsoft.com/en-us/windows-hardware/get-started/adk-install."
-        exit 1
-    }
-    Write-Host "Windows ADK with WinPE Add-on detected."
 }
 
 # Function to shrink the OS partition and create a recovery partition
@@ -114,59 +104,40 @@ function New-RecoveryPartition {
     }
 }
 
-# Function to download and install OSDCloud WinPE with embedded Start-OSDCloud parameters
-function Install-OSDCloudWinPE {
+# Function to download and place prebuilt OSDCloud WinPE boot.wim
+function Install-PrebuiltWinPE {
     param (
         [string]$DriveLetter,
-        [string]$WorkspacePath = "$env:ProgramData\OSDCloud"
+        [string]$WinPEUrl = "https://files.khemgeek.com/boot.wim"
     )
 
-    Write-Host "Installing OSDCloud WinPE to $DriveLetter..."
+    Write-Host "Downloading prebuilt OSDCloud WinPE boot.wim to $DriveLetter..."
 
-    # Install OSD PowerShell module if not already installed
-    if (-not (Get-Module -ListAvailable -Name OSD)) {
-        Write-Host "Installing OSD PowerShell module..."
-        Install-Module -Name OSD -Force -Scope CurrentUser -ErrorAction Stop
-        Import-Module OSD -Force
-    }
-
-    # Create OSDCloud template and workspace
-    try {
-        New-OSDCloudTemplate -Language en-us -SetInputLocale en-us -Verbose
-        New-OSDCloudWorkspace -WorkspacePath $WorkspacePath -Verbose
-        Set-OSDCloudWorkspace -WorkspacePath $WorkspacePath -Verbose
-    }
-    catch {
-        Write-Error "Failed to create OSDCloud template/workspace: $_"
-        exit 1
-    }
-
-    # Customize WinPE with drivers and embedded Start-OSDCloud parameters
-    try {
-        Edit-OSDCloudWinPE -WorkspacePath $WorkspacePath -CloudDriver Dell,HP,IntelNet,LenovoDock,Nutanix,USB,VMware,WiFi `
-            -StartOSDCloud "-OSName 'Windows 11 24H2 x64' -OSEdition Pro -OSActivation Retail -OSLanguage en-us -RecoveryPartition" -Verbose
-        Write-Host "Customized WinPE with embedded Start-OSDCloud parameters."
-    }
-    catch {
-        Write-Error "Failed to customize OSDCloud WinPE: $_"
-        exit 1
-    }
-
-    # Copy WinPE files to the recovery partition
-    $winPEPath = "$WorkspacePath\Media\sources\boot.wim"
-    if (-not (Test-Path $winPEPath)) {
-        Write-Error "WinPE image not found at $winPEPath."
-        exit 1
-    }
-
+    # Create recovery directory
     try {
         $recoveryPath = "${DriveLetter}:\Recovery\WindowsRE"
-        New-Item -Path $recoveryPath -ItemType Directory -Force
-        Copy-Item -Path $winPEPath -Destination "$recoveryPath\winre.wim" -Force
-        Write-Host "Copied WinPE image to $recoveryPath\winre.wim."
+        New-Item -Path $recoveryPath -ItemType Directory -Force | Out-Null
+        Write-Host "Created recovery directory at $recoveryPath."
     }
     catch {
-        Write-Error "Failed to copy WinPE image: $_"
+        Write-Error "Failed to create recovery directory: $_"
+        exit 1
+    }
+
+    # Download boot.wim
+    try {
+        $winPEPath = "$recoveryPath\winre.wim"
+        Invoke-WebRequest -Uri $WinPEUrl -OutFile $winPEPath -ErrorAction Stop
+        Write-Host "Downloaded prebuilt boot.wim to $winPEPath."
+    }
+    catch {
+        Write-Error "Failed to download boot.wim from $WinPEUrl: $_"
+        exit 1
+    }
+
+    # Verify the downloaded file
+    if (-not (Test-Path $winPEPath)) {
+        Write-Error "Downloaded boot.wim not found at $winPEPath."
         exit 1
     }
 
@@ -245,21 +216,18 @@ function Set-WinREBoot {
 
 # Main script execution
 try {
-    Write-Host "Starting recovery partition creation and OSDCloud setup..."
+    Write-Host "Starting recovery partition creation and OSDCloud WinPE setup..."
 
-    # Step 1: Check for Windows ADK
-    Test-WinADK
-
-    # Step 2: Shrink OS partition and create recovery partition
+    # Step 1: Shrink OS partition and create recovery partition
     $driveLetter = New-RecoveryPartition
 
-    # Step 3: Install OSDCloud WinPE to recovery partition with embedded Start-OSDCloud
-    $recoveryPath = Install-OSDCloudWinPE -DriveLetter $driveLetter
+    # Step 2: Download and place prebuilt OSDCloud WinPE
+    $recoveryPath = Install-PrebuiltWinPE -DriveLetter $driveLetter
 
-    # Step 4: Configure WinRE and boot settings
+    # Step 3: Configure WinRE and boot settings
     Set-WinREBoot -RecoveryPath $recoveryPath -DriveLetter $driveLetter
 
-    # Step 5: Signal reboot into recovery partition
+    # Step 4: Signal reboot into recovery partition
     Write-Host "Rebooting into recovery partition to start OSDCloud OS reinstallation..."
     Start-Sleep -Seconds 5
     Restart-Computer -Force
