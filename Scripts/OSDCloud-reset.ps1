@@ -164,7 +164,7 @@ function Install-PrebuiltWinPE {
         }
     }
     catch {
-        Write-Error "Failed to download boot.wim from $WinPEUrl: $_"
+        Write-Error "Failed to download boot.wim from $WinPEUrl."
         exit 1
     }
 
