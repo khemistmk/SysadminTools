@@ -8,8 +8,8 @@
 
 .DESCRIPTION
     This script shrinks the OS partition to create a 2GB recovery partition, downloads a prebuilt OSDCloud
-    WinPE boot.wim from a specified URL, places it in the recovery partition, configures WinRE and BCD,
-    and reboots into the recovery partition to start OS reinstallation. Designed to be run remotely via irm and iex.
+    WinPE boot.wim, places it in the recovery partition, configures WinRE and BCD, and reboots into the
+    recovery partition. Designed to be run remotely via irm and iex.
 
 .NOTES
     Author: Grok
@@ -96,8 +96,8 @@ function New-RecoveryPartition {
         Set-Partition -DriveLetter $driveLetter -GptType "{de94bba4-06d1-4d40-a16a-bfd50179d6ac}"
         Write-Host "Set partition type to Recovery."
 
-        # Wait briefly to ensure the partition is ready
-        Start-Sleep -Seconds 2
+        # Wait to ensure the partition is ready
+        Start-Sleep -Seconds 5
 
         # Verify the partition is accessible
         $volume = Get-Volume -DriveLetter $driveLetter -ErrorAction SilentlyContinue
@@ -136,7 +136,7 @@ function Install-PrebuiltWinPE {
         Write-Host "Created recovery directory at $recoveryPath."
     }
     catch {
-        Write-Error "Failed to create recovery directory at $recoveryPath : $_"
+        Write-Error "Failed to create recovery directory at $recoveryPath: $_"
         exit 1
     }
 
@@ -164,7 +164,7 @@ function Install-PrebuiltWinPE {
         }
     }
     catch {
-        Write-Error "Failed to download boot.wim from $WinPEUrl."
+        Write-Error "Failed to download boot.wim from $WinPEUrl"
         exit 1
     }
 
@@ -193,6 +193,10 @@ function Set-WinREBoot {
     $diskNumber = $recoveryPartition.DiskNumber
 
     try {
+        # Backup the current BCD
+        bcdedit /export "C:\BCD_Backup.bcd" | Out-Null
+        Write-Host "Backed up BCD to C:\BCD_Backup.bcd."
+
         # Disable WinRE temporarily
         reagentc /disable | Out-Null
         Write-Host "Disabled existing WinRE configuration."
@@ -230,9 +234,9 @@ function Set-WinREBoot {
         bcdedit /set $guid osdevice partition=${DriveLetter}: | Out-Null
         bcdedit /set $guid path \Recovery\WindowsRE\winre.wim | Out-Null
         bcdedit /set $guid recoveryenabled Yes | Out-Null
-        bcdedit /set $guid recoverysequence $guid | Out-Null
-        bcdedit /displayorder $guid /addfirst | Out-Null
-        Write-Host "Configured BCD to boot from recovery partition (GUID: $guid)."
+        bcdedit /set_wifi = $guid recoverysequence $guid | Out-Null
+        bcdedit /displayorder $guid /addlast | Out-Null  # Changed to /addlast to avoid disrupting default boot
+        Write-Host "Configured BCD to include recovery partition (GUID: $guid)."
 
         # Verify BCD configuration
         $bcdCheck = bcdedit /enum all | Select-String $guid
@@ -262,7 +266,8 @@ try {
 
     # Step 4: Signal reboot into recovery partition
     Write-Host "Rebooting into recovery partition to start OSDCloud OS reinstallation..."
-    Start-Sleep -Seconds 5
+    Write-Host "Press Ctrl+C to cancel or wait 10 seconds to proceed..."
+    Start-Sleep -Seconds 10
     Restart-Computer -Force
 }
 catch {
