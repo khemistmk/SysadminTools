@@ -1,276 +1,125 @@
-#requires -RunAsAdministrator
-#requires -Version 5.1
+# Requires -RunAsAdministrator
 
-<#
-.SYNOPSIS
-    Shrinks the OS partition, creates a recovery partition, downloads a prebuilt OSDCloud WinPE boot.wim,
-    configures the boot settings, and reboots into the recovery partition for OS reinstallation.
+# Function to check if running as Administrator
+function Test-Admin {
+    $currentUser = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    return $currentUser.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
 
-.DESCRIPTION
-    This script shrinks the OS partition to create a 2GB recovery partition, downloads a prebuilt OSDCloud
-    WinPE boot.wim, places it in the recovery partition, configures WinRE and BCD, and reboots into the
-    recovery partition. Designed to be run remotely via irm and iex.
-
-.NOTES
-    Author: Grok
-    Date: July 12, 2025
-    Requirements: Internet access, administrative privileges, Windows 10/11, UEFI firmware, GPT disk
-    Warning: Modifies disk partitions and may cause data loss. Test in a VM first.
-#>
-
-# Set execution policy to bypass for this session
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-
-# Ensure the script is running with administrative privileges
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Error "This script requires administrative privileges. Please run as Administrator."
+# Exit if not running as Administrator
+if (-not (Test-Admin)) {
+    Write-Error "This script must be run as an Administrator. Please run PowerShell as Administrator and try again."
     exit 1
 }
 
-# Function to shrink the OS partition and create a recovery partition
-function New-RecoveryPartition {
-    param (
-        [int]$DiskNumber = 0,
-        [int]$PartitionSizeMB = 2048  # 2GB for recovery partition
-    )
+# Variables
+$secondaryPartitionLetter = "D"
+$bootWimUrl = "https://files.khemgeek.com/boot.wim"
+$bootWimPath = "$secondaryPartitionLetter`:\Sources\boot.wim"
+$partitionSizeMB = 1024  # Size of the secondary partition in MB (1GB)
+$diskNumber = 0  # Assuming primary disk; adjust if needed
 
-    Write-Host "Shrinking OS partition and creating recovery partition on Disk $DiskNumber..."
-
-    # Get the target disk and verify it's GPT
-    $disk = Get-Disk -Number $DiskNumber
-    if (-not $disk) {
-        Write-Error "Disk $DiskNumber not found."
-        exit 1
-    }
-    if ($disk.PartitionStyle -ne 'GPT') {
-        Write-Error "Disk $DiskNumber is not GPT. This script requires a GPT disk for UEFI compatibility."
-        exit 1
-    }
-
-    # Identify the OS partition (largest NTFS partition with Windows folder)
-    $osPartition = Get-Partition -DiskNumber $DiskNumber | Where-Object {
-        $_.Type -eq 'Basic' -and $_.DriveLetter -and (Test-Path "$($_.DriveLetter):\Windows")
-    } | Sort-Object Size -Descending | Select-Object -First 1
-
-    if (-not $osPartition) {
-        Write-Error "Could not identify the OS partition on Disk $DiskNumber."
-        exit 1
-    }
-
-    $driveLetterOS = $osPartition.DriveLetter
-    Write-Host "Identified OS partition: Drive $driveLetterOS, Size: $($osPartition.Size / 1MB) MB"
-
-    # Check if the OS partition can be shrunk
-    $sizeInfo = Get-PartitionSupportedSize -DriveLetter $driveLetterOS
-    $minSizeMB = [math]::Ceiling($sizeInfo.SizeMin / 1MB)
-    $currentSizeMB = [math]::Ceiling($osPartition.Size / 1MB)
-    $availableShrinkMB = $currentSizeMB - $minSizeMB
-
-    if ($availableShrinkMB -lt $PartitionSizeMB) {
-        Write-Error "Insufficient shrinkable space on OS partition. Available: $availableShrinkMB MB, Required: $PartitionSizeMB MB. Try running 'defrag $driveLetterOS /X' to consolidate free space."
-        exit 1
-    }
-
-    # Shrink the OS partition
-    try {
-        $newSizeMB = $currentSizeMB - $PartitionSizeMB
-        Resize-Partition -DriveLetter $driveLetterOS -Size ($newSizeMB * 1MB) -ErrorAction Stop
-        Write-Host "Shrunk OS partition to $newSizeMB MB."
-    }
-    catch {
-        Write-Error "Failed to shrink OS partition: $_"
-        exit 1
-    }
-
-    # Create a new recovery partition in the freed space
-    try {
-        $partition = New-Partition -DiskNumber $DiskNumber -Size ($PartitionSizeMB * 1MB) -AssignDriveLetter
-        $driveLetter = $partition.DriveLetter
-        Write-Host "Created recovery partition with drive letter $driveLetter."
-
-        # Format the partition as NTFS
-        Format-Volume -DriveLetter $driveLetter -FileSystem NTFS -NewFileSystemLabel "Recovery" -Force -Confirm:$false
-        Write-Host "Formatted recovery partition as NTFS."
-
-        # Set partition type as Recovery (for UEFI)
-        Set-Partition -DriveLetter $driveLetter -GptType "{de94bba4-06d1-4d40-a16a-bfd50179d6ac}"
-        Write-Host "Set partition type to Recovery."
-
-        # Wait to ensure the partition is ready
-        Start-Sleep -Seconds 5
-
-        # Verify the partition is accessible
-        $volume = Get-Volume -DriveLetter $driveLetter -ErrorAction SilentlyContinue
-        if (-not $volume -or $volume.FileSystem -ne 'NTFS') {
-            Write-Error "Recovery partition (Drive $driveLetter) is not accessible or not NTFS."
-            exit 1
-        }
-
-        return $driveLetter
-    }
-    catch {
-        Write-Error "Failed to create or format recovery partition: $_"
-        exit 1
-    }
-}
-
-# Function to download and place prebuilt OSDCloud WinPE boot.wim
-function Install-PrebuiltWinPE {
-    param (
-        [string]$DriveLetter,
-        [string]$WinPEUrl = "https://files.khemgeek.com/boot.wim"
-    )
-
-    Write-Host "Downloading prebuilt OSDCloud WinPE boot.wim to $DriveLetter..."
-
-    # Verify the drive is accessible
-    if (-not (Test-Path "${DriveLetter}:\")) {
-        Write-Error "Recovery partition drive $DriveLetter is not accessible."
-        exit 1
-    }
-
-    # Create recovery directory
-    try {
-        $recoveryPath = "${DriveLetter}:\Recovery\WindowsRE"
-        New-Item -Path $recoveryPath -ItemType Directory -Force | Out-Null
-        Write-Host "Created recovery directory at $recoveryPath."
-    }
-    catch {
-        Write-Error "Failed to create recovery directory at $recoveryPath: $_"
-        exit 1
-    }
-
-    # Download boot.wim with retry logic
-    try {
-        $winPEPath = "$recoveryPath\winre.wim"
-        $maxRetries = 3
-        $retryCount = 0
-        $success = $false
-
-        while (-not $success -and $retryCount -lt $maxRetries) {
-            try {
-                Invoke-WebRequest -Uri $WinPEUrl -OutFile $winPEPath -ErrorAction Stop
-                $success = $true
-                Write-Host "Downloaded prebuilt boot.wim to $winPEPath."
-            }
-            catch {
-                $retryCount++
-                Write-Warning "Download attempt $retryCount failed: $_"
-                if ($retryCount -eq $maxRetries) {
-                    throw "Failed to download boot.wim after $maxRetries attempts: $_"
-                }
-                Start-Sleep -Seconds 2
-            }
-        }
-    }
-    catch {
-        Write-Error "Failed to download boot.wim from $WinPEUrl"
-        exit 1
-    }
-
-    # Verify the downloaded file
-    if (-not (Test-Path $winPEPath)) {
-        Write-Error "Downloaded boot.wim not found at $winPEPath."
-        exit 1
-    }
-
-    return $recoveryPath
-}
-
-# Function to configure WinRE and set boot order
-function Set-WinREBoot {
-    param (
-        [string]$RecoveryPath,
-        [string]$DriveLetter
-    )
-
-    Write-Host "Configuring WinRE and boot settings..."
-
-    # Configure ReAgent.xml for WinRE
-    $reagentXmlPath = "C:\Windows\System32\Recovery\ReAgent.xml"
-    $recoveryPartition = Get-Partition -DriveLetter $DriveLetter
-    $partitionIndex = $recoveryPartition.PartitionNumber
-    $diskNumber = $recoveryPartition.DiskNumber
-
-    try {
-        # Backup the current BCD
-        bcdedit /export "C:\BCD_Backup.bcd" | Out-Null
-        Write-Host "Backed up BCD to C:\BCD_Backup.bcd."
-
-        # Disable WinRE temporarily
-        reagentc /disable | Out-Null
-        Write-Host "Disabled existing WinRE configuration."
-
-        # Update ReAgent.xml with new WinRE path
-        $reagentXml = @"
-<WindowsRE version="2.0">
-  <WinreBCD id="{00000000-0000-0000-0000-000000000000}"/>
-  <WinreLocation path="\Recovery\WindowsRE" id="$partitionIndex" offset="0" guid="{00000000-0000-0000-0000-000000000000}"/>
-  <ImageLocation path="\Recovery\WindowsRE" id="$diskNumber" offset="0" guid="{00000000-0000-0000-0000-000000000000}"/>
-  <InstallState state="1"/>
-  <IsServer value="0"/>
-  <IsWimBoot value="0"/>
-  <CustomImage value="1"/>
-</WindowsRE>
-"@
-        Set-Content -Path $reagentXmlPath -Value $reagentXml -Force
-        Write-Host "Updated ReAgent.xml with new WinRE path."
-
-        # Enable WinRE with the new path
-        reagentc /setreimage /path "$RecoveryPath" /target C:\Windows | Out-Null
-        reagentc /enable | Out-Null
-        Write-Host "Enabled WinRE with new recovery partition."
-
-        # Create a new BCD entry for the recovery environment
-        $bcdEntry = bcdedit /create /d "Windows Recovery Environment" /application osloader
-        $guid = ($bcdEntry | Select-String "{.+}").Matches.Value
-        if (-not $guid) {
-            Write-Error "Failed to create BCD entry for WinRE."
-            exit 1
-        }
-
-        # Configure BCD entry
-        bcdedit /set $guid device partition=${DriveLetter}: | Out-Null
-        bcdedit /set $guid osdevice partition=${DriveLetter}: | Out-Null
-        bcdedit /set $guid path \Recovery\WindowsRE\winre.wim | Out-Null
-        bcdedit /set $guid recoveryenabled Yes | Out-Null
-        bcdedit /set_wifi = $guid recoverysequence $guid | Out-Null
-        bcdedit /displayorder $guid /addlast | Out-Null  # Changed to /addlast to avoid disrupting default boot
-        Write-Host "Configured BCD to include recovery partition (GUID: $guid)."
-
-        # Verify BCD configuration
-        $bcdCheck = bcdedit /enum all | Select-String $guid
-        if (-not $bcdCheck) {
-            Write-Error "BCD configuration verification failed."
-            exit 1
-        }
-    }
-    catch {
-        Write-Error "Failed to configure WinRE or boot settings: $_"
-        exit 1
-    }
-}
-
-# Main script execution
 try {
-    Write-Host "Starting recovery partition creation and OSDCloud WinPE setup..."
+    # Step 1: Identify and shrink the OS partition
+    Write-Host "Identifying OS partition..."
+    $osPartition = Get-Partition | Where-Object { $_.IsSystem -and $_.DriveLetter }
+    if (-not $osPartition) {
+        Write-Error "Could not identify the OS partition."
+        exit 1
+    }
 
-    # Step 1: Shrink OS partition and create recovery partition
-    $driveLetter = New-RecoveryPartition
+    $osDiskNumber = $osPartition.DiskNumber
+    $osPartitionNumber = $osPartition.PartitionNumber
+    Write-Host "OS partition found on Disk $osDiskNumber, Partition $osPartitionNumber."
 
-    # Step 2: Download and place prebuilt OSDCloud WinPE
-    $recoveryPath = Install-PrebuiltWinPE -DriveLetter $driveLetter
+    Write-Host "Shrinking OS partition to create $partitionSizeMB MB of unallocated space..."
+    $osPartition | Resize-Partition -Size ((Get-Partition -DiskNumber $osDiskNumber -PartitionNumber $osPartitionNumber).Size - ($partitionSizeMB * 1MB))
+    if ($?) {
+        Write-Host "OS partition shrunk successfully."
+    } else {
+        Write-Error "Failed to shrink OS partition."
+        exit 1
+    }
 
-    # Step 3: Configure WinRE and boot settings
-    Set-WinREBoot -RecoveryPath $recoveryPath -DriveLetter $driveLetter
+    # Step 2: Create a secondary partition in the unallocated space
+    Write-Host "Creating secondary partition..."
+    $diskpartScript = @"
+select disk $diskNumber
+create partition primary size=$partitionSizeMB
+format fs=ntfs quick label="WinPE"
+assign letter=$secondaryPartitionLetter
+active
+exit
+"@
 
-    # Step 4: Signal reboot into recovery partition
-    Write-Host "Rebooting into recovery partition to start OSDCloud OS reinstallation..."
-    Write-Host "Press Ctrl+C to cancel or wait 10 seconds to proceed..."
+    # Write diskpart script to a temporary file
+    $diskpartScriptPath = "$env:TEMP\diskpart_script.txt"
+    $diskpartScript | Out-File -FilePath $diskpartScriptPath -Encoding ASCII
+
+    # Run diskpart to create and format the partition
+    Start-Process -FilePath "diskpart.exe" -ArgumentList "/s $diskpartScriptPath" -Wait -NoNewWindow
+
+    if (-not (Test-Path "$secondaryPartitionLetter`:\")) {
+        Write-Error "Failed to create or assign secondary partition with letter $secondaryPartitionLetter."
+        exit 1
+    }
+
+    # Step 3: Create Sources directory on the secondary partition
+    Write-Host "Creating Sources directory on $secondaryPartitionLetter`:\..."
+    New-Item -Path "$secondaryPartitionLetter`:\Sources" -ItemType Directory -Force | Out-Null
+
+    # Step 4: Download boot.wim
+    Write-Host "Downloading boot.wim from $bootWimUrl..."
+    $webClient = New-Object System.Net.WebClient
+    $webClient.DownloadFile($bootWimUrl, $bootWimPath)
+
+    if (-not (Test-Path $bootWimPath)) {
+        Write-Error "Failed to download or save boot.wim to $bootWimPath."
+        exit 1
+    }
+
+    # Step 5: Configure BCD using bcdedit via cmd.exe
+    Write-Host "Configuring BCD boot entry..."
+    $bcdCommands = @"
+bcdedit /create {ramdiskoptions}
+bcdedit /set {ramdiskoptions} device partition=$secondaryPartitionLetter`:
+bcdedit /set {ramdiskoptions} path \Sources\boot.wim
+bcdedit /set {ramdiskoptions} osdevice ramdisk=[$secondaryPartitionLetter`:]\Sources\boot.wim,{ramdiskoptions}
+bcdedit /set {ramdiskoptions} systemroot \Windows
+bcdedit /set {ramdiskoptions} detecthal yes
+bcdedit /set {ramdiskoptions} winpe yes
+bcdedit /set {ramdiskoptions} description "Windows PE from Secondary Partition"
+bcdedit /displayorder {ramdiskoptions} /addlast
+bcdedit /timeout 10
+"@
+
+    # Write bcdedit commands to a temporary batch file
+    $bcdScriptPath = "$env:TEMP\bcdedit_commands.bat"
+    $bcdCommands | Out-File -FilePath $bcdScriptPath -Encoding ASCII
+
+    # Run bcdedit commands via cmd.exe
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c $bcdScriptPath" -Wait -NoNewWindow
+
+    # Verify BCD configuration
+    Write-Host "Verifying BCD configuration..."
+    $bcdOutput = bcdedit /enum
+    if ($bcdOutput -match "Windows PE from Secondary Partition") {
+        Write-Host "BCD configuration successful."
+    } else {
+        Write-Error "BCD configuration failed. Please check the boot entries manually using 'bcdedit /enum'."
+        exit 1
+    }
+
+    # Step 6: Reboot the computer
+    Write-Host "Rebooting the computer in 10 seconds to boot into the secondary partition..."
     Start-Sleep -Seconds 10
     Restart-Computer -Force
-}
-catch {
-    Write-Error "Script execution failed: $_"
+
+} catch {
+    Write-Error "An error occurred: $($_.Exception.Message)"
     exit 1
+} finally {
+    # Clean up temporary files
+    if (Test-Path $diskpartScriptPath) { Remove-Item $diskpartScriptPath -Force }
+    if (Test-Path $bcdScriptPath) { Remove-Item $bcdScriptPath -Force }
 }
