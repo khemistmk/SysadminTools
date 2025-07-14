@@ -20,20 +20,41 @@ $partitionSizeMB = 1024  # Size of the secondary partition in MB (1GB)
 $diskNumber = 0  # Assuming primary disk; adjust if needed
 
 try {
-    # Step 1: Identify and shrink the OS partition
+    # Step 1: Identify the OS partition
     Write-Host "Identifying OS partition..."
-    $osPartition = Get-Partition | Where-Object { $_.IsSystem -and $_.DriveLetter }
+    $osPartition = $null
+    $partitions = Get-Partition
+    foreach ($partition in $partitions) {
+        if ($partition.DriveLetter -and (Test-Path "$($partition.DriveLetter):\Windows")) {
+            $osPartition = $partition
+            break
+        }
+    }
+
     if (-not $osPartition) {
-        Write-Error "Could not identify the OS partition."
+        Write-Host "DEBUG: Listing all partitions for troubleshooting..."
+        $partitions | Format-Table DiskNumber, PartitionNumber, DriveLetter, Size, Type -AutoSize
+        Write-Error "Could not identify the OS partition. Ensure the Windows directory exists on a partition with a drive letter."
         exit 1
     }
 
     $osDiskNumber = $osPartition.DiskNumber
     $osPartitionNumber = $osPartition.PartitionNumber
-    Write-Host "OS partition found on Disk $osDiskNumber, Partition $osPartitionNumber."
+    Write-Host "OS partition found on Disk $osDiskNumber, Partition $osPartitionNumber, Drive Letter $($osPartition.DriveLetter)."
 
+    # Check if there’s enough space to shrink
+    Write-Host "Checking available shrink space..."
+    $partitionInfo = Get-PartitionSupportedSize -DiskNumber $osDiskNumber -PartitionNumber $osPartitionNumber
+    $availableShrinkMB = [math]::Floor(($partitionInfo.SizeMax - $partitionInfo.SizeMin) / 1MB)
+    if ($availableShrinkMB -lt $partitionSizeMB) {
+        Write-Error "Insufficient space to shrink OS partition. Available: $availableShrinkMB MB, Required: $partitionSizeMB MB."
+        exit 1
+    }
+    Write-Host "Available shrink space: $availableShrinkMB MB."
+
+    # Step 2: Shrink the OS partition
     Write-Host "Shrinking OS partition to create $partitionSizeMB MB of unallocated space..."
-    $osPartition | Resize-Partition -Size ((Get-Partition -DiskNumber $osDiskNumber -PartitionNumber $osPartitionNumber).Size - ($partitionSizeMB * 1MB))
+    $osPartition | Resize-Partition -Size ($osPartition.Size - ($partitionSizeMB * 1MB))
     if ($?) {
         Write-Host "OS partition shrunk successfully."
     } else {
@@ -41,7 +62,7 @@ try {
         exit 1
     }
 
-    # Step 2: Create a secondary partition in the unallocated space
+    # Step 3: Create a secondary partition in the unallocated space
     Write-Host "Creating secondary partition..."
     $diskpartScript = @"
 select disk $diskNumber
@@ -64,11 +85,11 @@ exit
         exit 1
     }
 
-    # Step 3: Create Sources directory on the secondary partition
+    # Step 4: Create Sources directory on the secondary partition
     Write-Host "Creating Sources directory on $secondaryPartitionLetter`:\..."
     New-Item -Path "$secondaryPartitionLetter`:\Sources" -ItemType Directory -Force | Out-Null
 
-    # Step 4: Download boot.wim
+    # Step 5: Download boot.wim
     Write-Host "Downloading boot.wim from $bootWimUrl..."
     $webClient = New-Object System.Net.WebClient
     $webClient.DownloadFile($bootWimUrl, $bootWimPath)
@@ -78,7 +99,7 @@ exit
         exit 1
     }
 
-    # Step 5: Configure BCD using bcdedit via cmd.exe
+    # Step 6: Configure BCD using bcdedit via cmd.exe
     Write-Host "Configuring BCD boot entry..."
     $bcdCommands = @"
 bcdedit /create {ramdiskoptions}
@@ -110,7 +131,7 @@ bcdedit /timeout 10
         exit 1
     }
 
-    # Step 6: Reboot the computer
+    # Step 7: Reboot the computer
     Write-Host "Rebooting the computer in 10 seconds to boot into the secondary partition..."
     Start-Sleep -Seconds 10
     Restart-Computer -Force
@@ -118,8 +139,4 @@ bcdedit /timeout 10
 } catch {
     Write-Error "An error occurred: $($_.Exception.Message)"
     exit 1
-} finally {
-    # Clean up temporary files
-    if (Test-Path $diskpartScriptPath) { Remove-Item $diskpartScriptPath -Force }
-    if (Test-Path $bcdScriptPath) { Remove-Item $bcdScriptPath -Force }
 }
